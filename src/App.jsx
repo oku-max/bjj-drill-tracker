@@ -45,10 +45,12 @@ const COL = {
   ID:       0,   // A列: 固有ID
   SERIES:   1,   // B列: シリーズ
   CATEGORY: 2,   // C列: Top/Bottom
+  LESSON:   3,   // D列: レッスン
   POSITION: 4,   // E列: ポジション
   ACTION:   5,   // F列: アクション
   TECHNIQUE:6,   // G列: テクニック名
-  PRIORITY: 14,  // O列: 優先度（★）
+  FAVORITE: 13,  // N列: お気に入り（チェックボックス）
+  PRIORITY: 14,  // O列: 習熟度
   VIDEO1:   16,  // Q列: 動画1
   VIDEO2:   17,  // R列: 動画2
   VIDEO3:   18,  // S列: 動画3
@@ -87,17 +89,17 @@ const rowToDrill = (row) => {
     position: get(COL.POSITION),
     action: get(COL.ACTION),
     tags,
+    lesson: get(COL.LESSON),
+    favorite: ["TRUE","1","✓","☑"].includes(get(COL.FAVORITE).toUpperCase()),
+    proficiency: get(COL.PRIORITY),  // O列: 習熟度テキスト
     sheetMemo: get(COL.MEMO),
     youtubeUrl: videos[0]||"",
     youtubeUrl2: videos[1]||"",
     youtubeUrl3: videos[2]||"",
     imageUrl: "",  // 画像は使用しない
     refUrl: get(COL.REF_URL),
-    priority: get(COL.PRIORITY),
-    stars: starCount(get(COL.PRIORITY)),
-    fixedBySheet: isFixed(get(COL.PRIORITY)),
     fromSheet: true,
-    drillActive: true,  // W列チェック済み（アプリ上での管理フラグ）
+    drillActive: true,
   };
 };
 
@@ -451,7 +453,7 @@ function VideoPlayer({ videos }) {
 }
 
 // ─── Drill Card (共通) ────────────────────────────────────────────────────────
-function DrillCard({ drill, mode, done, elapsed, selected, onToggle, onTimer, onUnfix, onDelete, onEdit, onMemoChange, onStarChange, onDrillToggle }) {
+function DrillCard({ drill, mode, done, elapsed, selected, onToggle, onTimer, onUnfix, onDelete, onEdit, onMemoChange, onStarChange, onDrillToggle, onFavoriteChange, onProficiencyChange }) {
   const [open, setOpen] = useState(false);
   const hist = drill.history || [];
   const videos = [drill.youtubeUrl, drill.youtubeUrl2, drill.youtubeUrl3].filter(Boolean);
@@ -471,10 +473,12 @@ function DrillCard({ drill, mode, done, elapsed, selected, onToggle, onTimer, on
             <div className="cm">
               <span className="tg cat">{drill.category}</span>
               {drill.series&&<span className="tg">{drill.series}</span>}
+              {drill.lesson&&<span className="tg" style={{background:"#e8f4fd",color:"#1565c0"}}>🎓 {drill.lesson}</span>}
               {drill.tags?.slice(0,2).map(t=><span key={t} className="tg">{t}</span>)}
+              {drill.favorite&&<span className="tg" style={{background:"#fff0f5",color:"#c2185b"}}>♥ お気に入り</span>}
+              {drill.proficiency&&<span className="tg" style={{background:"#f3e5f5",color:"#6a1b9a"}}>📈 {drill.proficiency}</span>}
               {(drill.fixed||drill.fixedBySheet)&&<span className="tg fix-badge">{Ic.pin} 固定</span>}
               {drill.fromSheet&&<span className="tg sheet">📊</span>}
-              {drill.stars>=3&&<span className="tg gold">★{drill.stars}</span>}
               {elapsed>0&&<span style={{fontFamily:"'DM Mono',monospace",fontSize:11,color:"var(--accent-m)"}}>✓ {fmtTime(elapsed)}</span>}
             </div>
             <div className="ld">
@@ -518,23 +522,40 @@ function DrillCard({ drill, mode, done, elapsed, selected, onToggle, onTimer, on
               </button>
             </div>
           )}
-          {onMemoChange&&(
-            <div style={{marginTop:10}}>
-              <div style={{fontSize:11,color:"var(--muted)",marginBottom:4,fontWeight:500}}>メモ編集</div>
-              <textarea className="mi" style={{minHeight:60,fontSize:12}}
-                value={drill.sheetMemo||""}
-                onChange={e=>onMemoChange(drill.id, e.target.value)}
-                placeholder="メモを入力..."/>
-            </div>
-          )}
-          {onStarChange&&(
-            <div style={{marginTop:8,display:"flex",alignItems:"center",gap:8}}>
-              <div style={{fontSize:11,color:"var(--muted)",fontWeight:500}}>優先度：</div>
-              {[0,1,2,3,4,5].map(n=>(
-                <span key={n} style={{cursor:"pointer",fontSize:18,color:n<=(drill.stars||0)?"var(--gold)":"var(--border-s)"}}
-                  onClick={()=>onStarChange(drill.id, n)}>★</span>
-              ))}
-              <span style={{fontSize:11,color:"var(--muted)"}}>({drill.stars||0})</span>
+          {(onMemoChange||onFavoriteChange||onProficiencyChange)&&(
+            <div style={{marginTop:10,background:"var(--bg)",borderRadius:6,padding:"10px 12px",border:"1px solid var(--border)"}}>
+              <div style={{fontSize:11,color:"var(--muted)",fontWeight:500,marginBottom:8}}>✏️ 編集</div>
+
+              {/* お気に入り */}
+              {onFavoriteChange&&(
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+                  <span style={{fontSize:13,fontWeight:500}}>♥ お気に入り</span>
+                  <button className={`tog ${drill.favorite?"on":""}`}
+                    style={{background: drill.favorite?"#c2185b":"var(--border-s)"}}
+                    onClick={()=>onFavoriteChange(drill.id, !drill.favorite)}/>
+                </div>
+              )}
+
+              {/* 習熟度 */}
+              {onProficiencyChange&&(
+                <div style={{marginBottom:10}}>
+                  <div style={{fontSize:11,color:"var(--muted)",marginBottom:4,fontWeight:500}}>📈 習熟度</div>
+                  <input className="fi" style={{fontSize:12}} value={drill.proficiency||""}
+                    onChange={e=>onProficiencyChange(drill.id, e.target.value)}
+                    placeholder="例: 初級・中級・上級など"/>
+                </div>
+              )}
+
+              {/* メモ編集 */}
+              {onMemoChange&&(
+                <div>
+                  <div style={{fontSize:11,color:"var(--muted)",marginBottom:4,fontWeight:500}}>メモ</div>
+                  <textarea className="mi" style={{minHeight:60,fontSize:12}}
+                    value={drill.sheetMemo||""}
+                    onChange={e=>onMemoChange(drill.id, e.target.value)}
+                    placeholder="メモを入力..."/>
+                </div>
+              )}
             </div>
           )}
           {drill.refUrl&&(
@@ -710,8 +731,11 @@ function SheetsPanel({ drills, onSync }) {
         const stars = d.stars || 0;
         const starStr = "★".repeat(stars);
 
-        // O列: 優先度（★の数で表現）
-        valueRanges.push({ range:`${sheetName}!${O}${row}`, values:[[starStr]] });
+        // N列: お気に入り
+        const N = colLetter(14);
+        valueRanges.push({ range:`${sheetName}!${N}${row}`, values:[[d.favorite?"TRUE":""]] });
+        // O列: 習熟度
+        valueRanges.push({ range:`${sheetName}!${O}${row}`, values:[[d.proficiency||""]] });
         // W列: ドリルチェック（drillActive=falseなら空白に）
         const W = colLetter(23);
         valueRanges.push({ range:`${sheetName}!${W}${row}`, values:[[d.drillActive===false?"":"TRUE"]] });
@@ -991,7 +1015,7 @@ function FilterRow({label, values, current, onChange, multi=false}) {
 }
 
 // ─── Search Tab ───────────────────────────────────────────────────────────────
-function SearchTab({ drills, routines, onAddToToday, onDeleteDrills, onCreateRoutine, onAddToRoutine, onShowRoutineMenu, onMemoChange, onStarChange, onDrillToggle }) {
+function SearchTab({ drills, routines, onAddToToday, onDeleteDrills, onCreateRoutine, onAddToRoutine, onShowRoutineMenu, onMemoChange, onStarChange, onDrillToggle, onFavoriteChange, onProficiencyChange }) {
   const [q, setQ] = useState("");
   const [cats, setCats] = useState([]);
   const [actions, setActions] = useState([]);
@@ -1001,6 +1025,7 @@ function SearchTab({ drills, routines, onAddToToday, onDeleteDrills, onCreateRou
   const [selectedIds, setSelectedIds] = useState([]);
   const [showRoutineMenu, setShowRoutineMenu] = useState(false);
   const [routineMenuAnchor, setRoutineMenuAnchor] = useState(null);
+  const [favoriteOnly, setFavoriteOnly] = useState(false);
 
   const seriesList = useMemo(()=>[...new Set(drills.map(d=>d.series).filter(Boolean))],[drills]);
 
@@ -1014,6 +1039,7 @@ function SearchTab({ drills, routines, onAddToToday, onDeleteDrills, onCreateRou
     return drills
       .filter(d=>{
         if (d.drillActive===false) return false;
+        if (favoriteOnly&&!d.favorite) return false;
         if (cats.length>0&&!cats.includes(d.category)) return false;
         if (actions.length>0&&!actions.some(a=>(d.action||"").includes(a))) return false;
         if (positions.length>0&&!positions.some(p=>(d.position||"").includes(p.replace(/^\d+\./,"").trim()))) return false;
@@ -1034,7 +1060,7 @@ function SearchTab({ drills, routines, onAddToToday, onDeleteDrills, onCreateRou
         if (sortBy==="history") return (b.history?.length||0)-(a.history?.length||0);
         return 0;
       });
-  }, [drills, q, cats, actions, positions, series, sortBy]);
+  }, [drills, q, cats, actions, positions, series, sortBy, favoriteOnly]);
 
   const toggleSelect = (id) => {
     const sid = String(id);
@@ -1048,6 +1074,13 @@ function SearchTab({ drills, routines, onAddToToday, onDeleteDrills, onCreateRou
       <div className="search-box">
         <input className="search-in" value={q} onChange={e=>setQ(e.target.value)}
           placeholder="テクニック名・メモ・タグで検索..."/>
+        <button className="btn btn-sm" style={{flexShrink:0,
+          background:favoriteOnly?"#c2185b":"white",
+          color:favoriteOnly?"white":"var(--muted)",
+          border:"1px solid",borderColor:favoriteOnly?"#c2185b":"var(--border)"}}
+          onClick={()=>setFavoriteOnly(p=>!p)}>
+          ♥ お気に入り
+        </button>
         {q&&<button className="btn btn-g btn-sm" onClick={()=>setQ("")}>{Ic.close}</button>}
       </div>
       <FilterRow label="トップ・ボトム" values={["すべて",...CATEGORIES.slice(1)]} current={cats} onChange={toggleFilter(setCats)} multi/>
@@ -1058,8 +1091,8 @@ function SearchTab({ drills, routines, onAddToToday, onDeleteDrills, onCreateRou
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,marginTop:6}}>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
           <div className="search-count">{filtered.length}件</div>
-          {(cats.length>0||actions.length>0||positions.length>0||series.length>0||q)&&
-            <button className="btn btn-g btn-xs" onClick={()=>{setCats([]);setActions([]);setPositions([]);setSeries([]);setQ("");}}>リセット</button>}
+          {(cats.length>0||actions.length>0||positions.length>0||series.length>0||q||favoriteOnly)&&
+            <button className="btn btn-g btn-xs" onClick={()=>{setCats([]);setActions([]);setPositions([]);setSeries([]);setQ("");setFavoriteOnly(false);}}>リセット</button>}
         </div>
         <select className="fi fs" style={{width:"auto",fontSize:12,padding:"4px 24px 4px 8px"}} value={sortBy} onChange={e=>setSortBy(e.target.value)}>
           <option value="name">名前順</option>
@@ -1098,7 +1131,8 @@ function SearchTab({ drills, routines, onAddToToday, onDeleteDrills, onCreateRou
               onToggle={()=>toggleSelect(d.id)}
               onTimer={()=>{}} onUnfix={()=>{}} onDelete={()=>{}} onEdit={()=>{}}
               onMemoChange={onMemoChange} onStarChange={onStarChange}
-              onDrillToggle={onDrillToggle}/>
+              onDrillToggle={onDrillToggle}
+              onFavoriteChange={onFavoriteChange} onProficiencyChange={onProficiencyChange}/>
           ))
       }
     </div>
@@ -1330,8 +1364,8 @@ export default function App() {
             position:sd.position, action:sd.action, tags:sd.tags,
             sheetMemo:sd.sheetMemo, youtubeUrl:sd.youtubeUrl,
             youtubeUrl2:sd.youtubeUrl2, youtubeUrl3:sd.youtubeUrl3,
-            imageUrl:sd.imageUrl, refUrl:sd.refUrl, priority:sd.priority, stars:sd.stars,
-            fixedBySheet:sd.fixedBySheet,
+            imageUrl:sd.imageUrl, refUrl:sd.refUrl,
+            lesson:sd.lesson, favorite:sd.favorite, proficiency:sd.proficiency,
             drillActive: existing.drillActive !== false ? true : false,
           });
           updated++;
@@ -1381,6 +1415,14 @@ export default function App() {
   };
   const handleStarChange = (id, stars) => {
     const nd = drills.map(d=>String(d.id)===String(id)?{...d,stars}:d);
+    setDrills(nd); saveAll(nd,null,null,undefined);
+  };
+  const handleFavoriteChange = (id, fav) => {
+    const nd = drills.map(d=>String(d.id)===String(id)?{...d,favorite:fav}:d);
+    setDrills(nd); saveAll(nd,null,null,undefined);
+  };
+  const handleProficiencyChange = (id, prof) => {
+    const nd = drills.map(d=>String(d.id)===String(id)?{...d,proficiency:prof}:d);
     setDrills(nd); saveAll(nd,null,null,undefined);
   };
 
@@ -1474,7 +1516,8 @@ export default function App() {
                     onUnfix={()=>{ const nd=drills.map(x=>x.id===d.id?{...x,fixed:false,fixedBySheet:false}:x); setDrills(nd); saveAll(nd,null,null,undefined); }}
                     onDelete={()=>{}} onEdit={()=>{}}
                     onMemoChange={handleMemoChange} onStarChange={handleStarChange}
-                    onDrillToggle={handleDrillToggle}/>
+                    onDrillToggle={handleDrillToggle}
+                    onFavoriteChange={handleFavoriteChange} onProficiencyChange={handleProficiencyChange}/>
                 ))}
                 <hr className="dv"/>
               </>
@@ -1498,7 +1541,8 @@ export default function App() {
                     onTimer={()=>setTimerDrill(d)}
                     onUnfix={()=>{}} onDelete={()=>{}} onEdit={()=>{}}
                     onMemoChange={handleMemoChange} onStarChange={handleStarChange}
-                    onDrillToggle={handleDrillToggle}/>
+                    onDrillToggle={handleDrillToggle}
+                    onFavoriteChange={handleFavoriteChange} onProficiencyChange={handleProficiencyChange}/>
                 ))
             }
 
@@ -1565,6 +1609,8 @@ export default function App() {
               onMemoChange={handleMemoChange}
               onStarChange={handleStarChange}
               onDrillToggle={handleDrillToggle}
+              onFavoriteChange={handleFavoriteChange}
+              onProficiencyChange={handleProficiencyChange}
             />
           </div>
         )}
