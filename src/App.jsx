@@ -1,4 +1,20 @@
 import { useState, useEffect, useRef, useMemo } from "react";
+import { initializeApp } from "firebase/app";
+import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "firebase/firestore";
+
+// ─── Firebase Config ───────────────────────────────────────────────────────────
+const firebaseConfig = {
+  apiKey: "AIzaSyAV3Ua9G_zukeNN2M_Hnh00LfVDdoGvaCw",
+  authDomain: "bjj-drill-tracker-9238c.firebaseapp.com",
+  projectId: "bjj-drill-tracker-9238c",
+  storageBucket: "bjj-drill-tracker-9238c.firebasestorage.app",
+  messagingSenderId: "912789534137",
+  appId: "1:912789534137:web:dfc89f4351e4ac67cef268"
+};
+const fbApp = initializeApp(firebaseConfig);
+const db = getFirestore(fbApp);
+const USER_ID = "hiroki"; // 固定ユーザーID（個人利用のため）
+const dbRef = () => doc(db, "users", USER_ID);
 
 // ─── Google OAuth Config ───────────────────────────────────────────────────────
 const GOOGLE_CLIENT_ID = "761507724767-f0rmd48c8k5js8bnv8ufb0hrmdkl4hna.apps.googleusercontent.com";
@@ -9,8 +25,18 @@ const today = new Date().toISOString().split("T")[0];
 const daysSince = (d) => !d ? 999 : Math.floor((new Date(today) - new Date(d)) / 86400000);
 const fmtTime = (s) => `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
 const uid = () => `${Date.now()}_${Math.random().toString(36).slice(2)}`;
-const CATEGORIES = ["すべて","トップ","ボトム","スタンド","ムーブメント"];
+const CATEGORIES = ["すべて","トップ","ボトム","スタンディング","ハーフ","バック","ドリル"];
 const WEEK_DAYS = ["日","月","火","水","木","金","土"];
+
+const ACTIONS = ["すべて","エスケープ・ディフェンス","パスガード","アタック","スイープ","リテンション","コントロール","テイクダウン","崩し"];
+const POSITIONS = ["すべて","01.サイド","02.マウント","03.クローズド","03.ニーオン","04.ハーフガード","04.ニーシールド","05.スパイダー・ラッソー","06.バック","07.スタンディング","08.オープンガード","09.バタフライ・シッティング","10.デラヒーバ","11.タートル","12.ノースサウス","13.ヘッドロック","14.Xガード","15.シングルレッグガード","16.ヘッドクオーター","17.コンバットベース","18.片襟片袖"];
+
+// Google Drive URLを直接表示可能なURLに変換
+const toDriveImg = (url) => {
+  if (!url) return "";
+  const m = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+  return m ? `https://drive.google.com/uc?export=view&id=${m[1]}` : url;
+};
 
 // ─── Column Mapping ───────────────────────────────────────────────────────────
 const COL = {
@@ -32,9 +58,12 @@ const COL = {
 const catMap = (v) => {
   if (!v) return "ボトム";
   const u = v.toLowerCase();
-  if (u.includes("top") || u.includes("トップ")) return "トップ";
-  if (u.includes("bottom") || u.includes("ボトム")) return "ボトム";
-  if (u.includes("stand") || u.includes("スタンド")) return "スタンド";
+  if (u.includes("1") || u.includes("top") || u.includes("トップ")) return "トップ";
+  if (u.includes("2") || u.includes("bottom") || u.includes("ボトム")) return "ボトム";
+  if (u.includes("3") || u.includes("stand") || u.includes("スタンド")) return "スタンディング";
+  if (u.includes("4") || u.includes("half") || u.includes("ハーフ")) return "ハーフ";
+  if (u.includes("5") || u.includes("back") || u.includes("バック")) return "バック";
+  if (u.includes("0") || u.includes("drill") || u.includes("ドリル")) return "ドリル";
   return v;
 };
 const starCount = (v) => v ? (v.match(/★/g)||[]).length : 0;
@@ -57,7 +86,7 @@ const rowToDrill = (row) => {
     youtubeUrl: videos[0]||"",
     youtubeUrl2: videos[1]||"",
     youtubeUrl3: videos[2]||"",
-    imageUrl: get(COL.IMAGE),
+    imageUrl: toDriveImg(get(COL.IMAGE)),
     priority: get(COL.PRIORITY),
     stars: starCount(get(COL.PRIORITY)),
     fixedBySheet: isFixed(get(COL.PRIORITY)),
@@ -732,6 +761,8 @@ function SuggestTab({ drills, onAddToToday }) {
 function SearchTab({ drills, onAddToToday }) {
   const [q, setQ] = useState("");
   const [cat, setCat] = useState("すべて");
+  const [action, setAction] = useState("すべて");
+  const [position, setPosition] = useState("すべて");
   const [series, setSeries] = useState("すべて");
   const [sortBy, setSortBy] = useState("name");
 
@@ -741,6 +772,8 @@ function SearchTab({ drills, onAddToToday }) {
     return drills
       .filter(d=>{
         if (cat!=="すべて"&&d.category!==cat) return false;
+        if (action!=="すべて"&&!(d.action||"").includes(action)) return false;
+        if (position!=="すべて"&&!(d.position||"").includes(position.replace(/^\d+\./,"").trim())) return false;
         if (series!=="すべて"&&d.series!==series) return false;
         if (!q) return true;
         const lq=q.toLowerCase();
@@ -758,25 +791,34 @@ function SearchTab({ drills, onAddToToday }) {
         if (sortBy==="history") return (b.history?.length||0)-(a.history?.length||0);
         return 0;
       });
-  }, [drills, q, cat, series, sortBy]);
+  }, [drills, q, cat, action, position, series, sortBy]);
+
+  const FilterRow = ({label, values, current, onChange}) => (
+    <div style={{marginBottom:8}}>
+      <div style={{fontSize:11,color:"var(--muted)",marginBottom:4,fontWeight:500}}>{label}</div>
+      <div style={{display:"flex",gap:5,flexWrap:"nowrap",overflowX:"auto",paddingBottom:3,scrollbarWidth:"none"}}>
+        {values.map(v=><div key={v} className={`fc ${current===v?"on":""}`} style={{flexShrink:0,fontSize:11}} onClick={()=>onChange(v)}>{v==="すべて"?"すべて":v.replace(/^\d+\./,"")}</div>)}
+      </div>
+    </div>
+  );
 
   return (
     <div>
       <div className="search-box">
         <input className="search-in" value={q} onChange={e=>setQ(e.target.value)}
-          placeholder="テクニック名・メモ・タグで検索..." autoFocus/>
+          placeholder="テクニック名・メモ・タグで検索..."/>
         {q&&<button className="btn btn-g btn-sm" onClick={()=>setQ("")}>{Ic.close}</button>}
       </div>
-      <div className="fb">
-        {CATEGORIES.map(c=><div key={c} className={`fc ${cat===c?"on":""}`} onClick={()=>setCat(c)}>{c}</div>)}
-      </div>
-      {seriesList.length>1&&(
-        <div className="fb">
-          {seriesList.map(s=><div key={s} className={`fc ${series===s?"on":""}`} onClick={()=>setSeries(s)}>{s}</div>)}
+      <FilterRow label="トップ・ボトム" values={CATEGORIES} current={cat} onChange={setCat}/>
+      <FilterRow label="アクション" values={ACTIONS} current={action} onChange={setAction}/>
+      <FilterRow label="ポジション" values={POSITIONS} current={position} onChange={setPosition}/>
+      {seriesList.length>1&&<FilterRow label="シリーズ" values={seriesList} current={series} onChange={setSeries}/>}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,marginTop:6}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <div className="search-count">{filtered.length}件</div>
+          {(cat!=="すべて"||action!=="すべて"||position!=="すべて"||series!=="すべて"||q)&&
+            <button className="btn btn-g btn-xs" onClick={()=>{setCat("すべて");setAction("すべて");setPosition("すべて");setSeries("すべて");setQ("");}}>リセット</button>}
         </div>
-      )}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-        <div className="search-count">{filtered.length}件</div>
         <select className="fi fs" style={{width:"auto",fontSize:12,padding:"4px 24px 4px 8px"}} value={sortBy} onChange={e=>setSortBy(e.target.value)}>
           <option value="name">名前順</option>
           <option value="lastDone">最近やった順</option>
@@ -886,24 +928,57 @@ function DrillForm({ drill, onSave, onCancel }) {
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [tab, setTab] = useState("today");
-  const [drills, setDrills] = useState(()=>LS.get("drills_v5", SAMPLE_DRILLS));
-  const [routines, setRoutines] = useState(()=>LS.get("routines_v5", SAMPLE_ROUTINES));
-  const [sessionLogs, setSessionLogs] = useState(()=>LS.get("sessionLogs", {}));
+  const [drills, setDrills] = useState(SAMPLE_DRILLS);
+  const [routines, setRoutines] = useState(SAMPLE_ROUTINES);
+  const [sessionLogs, setSessionLogs] = useState({});
   const [selectedIds, setSelectedIds] = useState([]);
   const [doneIds, setDoneIds] = useState([]);
   const [elapsed, setElapsed] = useState({});
   const [filterCat, setFilterCat] = useState("すべて");
-  const [memo, setMemo] = useState(()=>LS.get(`memo_${today}`,""));
+  const [memo, setMemo] = useState("");
   const [editDrill, setEditDrill] = useState(null);
   const [editRoutine, setEditRoutine] = useState(null);
   const [timerDrill, setTimerDrill] = useState(null);
   const [activeRoutine, setActiveRoutine] = useState(null);
 
-  // 永続化
-  useEffect(()=>{ LS.set("drills_v5", drills); }, [drills]);
-  useEffect(()=>{ LS.set("routines_v5", routines); }, [routines]);
-  useEffect(()=>{ LS.set("sessionLogs", sessionLogs); }, [sessionLogs]);
-  useEffect(()=>{ LS.set(`memo_${today}`, memo); }, [memo]);
+  // ── Firebase リアルタイム同期 ────────────────────────────────────────────────
+  const [syncStatus, setSyncStatus] = useState("connecting"); // connecting | synced | error
+  const isSaving = useRef(false);
+  const pendingSave = useRef(null);
+
+  // 起動時: Firestoreからデータ取得 + リアルタイム監視
+  useEffect(() => {
+    const unsub = onSnapshot(dbRef(), (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data.drills) setDrills(data.drills);
+        if (data.routines) setRoutines(data.routines);
+        if (data.sessionLogs) setSessionLogs(data.sessionLogs);
+        if (data.memo) setMemo(data.memo[today] || "");
+        setSyncStatus("synced");
+      } else {
+        // 初回: サンプルデータを保存
+        saveToFirebase({ drills: SAMPLE_DRILLS, routines: SAMPLE_ROUTINES, sessionLogs: {}, memo: {} });
+        setSyncStatus("synced");
+      }
+    }, (err) => {
+      console.error(err);
+      setSyncStatus("error");
+    });
+    return () => unsub();
+  }, []);
+
+  // Firestoreへ保存（デバウンス: 1.5秒後）
+  const saveToFirebase = async (data) => {
+    try {
+      await setDoc(dbRef(), data, { merge: true });
+    } catch(e) { console.error("Firebase save error:", e); }
+  };
+
+  const debouncedSave = (data) => {
+    if (pendingSave.current) clearTimeout(pendingSave.current);
+    pendingSave.current = setTimeout(() => saveToFirebase(data), 1500);
+  };
 
   // Google API
   useEffect(()=>{ const s=document.createElement("script"); s.src="https://accounts.google.com/gsi/client"; s.async=true; document.head.appendChild(s); },[]);
@@ -914,6 +989,15 @@ export default function App() {
   const totalElapsed = Object.values(elapsed).reduce((a,b)=>a+b,0);
   const filteredDrills = drills.filter(d=>filterCat==="すべて"||d.category===filterCat);
 
+  // Firebase保存ヘルパー
+  const saveAll = (newDrills, newRoutines, newLogs, newMemo) => {
+    const d = newDrills || drills;
+    const r = newRoutines || routines;
+    const l = newLogs || sessionLogs;
+    const m = newMemo !== undefined ? newMemo : memo;
+    debouncedSave({ drills: d, routines: r, sessionLogs: l, memo: { [today]: m } });
+  };
+
   const markDone = (id) => {
     const sid = String(id);
     const isDone = doneIds.map(String).includes(sid);
@@ -922,14 +1006,17 @@ export default function App() {
     const drill = drills.find(d=>String(d.id)===sid||String(d.sheetId)===sid);
     if (!drill) return;
     const histEntry = { date:today, sec:elapsed[id]||0 };
-    setDrills(p=>p.map(d=>(String(d.id)===sid||String(d.sheetId)===sid)
-      ?{...d, lastDone:today, history:[...(d.history||[]), histEntry]}:d));
+    const newDrills = drills.map(d=>(String(d.id)===sid||String(d.sheetId)===sid)
+      ?{...d, lastDone:today, history:[...(d.history||[]), histEntry]}:d);
+    setDrills(newDrills);
     // セッションログ更新
-    setSessionLogs(prev=>{
-      const log = prev[today]||{drills:[],totalSec:0};
+    const newLogs = (() => {
+      const log = sessionLogs[today]||{drills:[],totalSec:0};
       const dName = drill.name;
-      return {...prev,[today]:{drills:log.drills.includes(dName)?log.drills:[...log.drills,dName],totalSec:log.totalSec+(elapsed[id]||0)}};
-    });
+      return {...sessionLogs,[today]:{drills:log.drills.includes(dName)?log.drills:[...log.drills,dName],totalSec:log.totalSec+(elapsed[id]||0)}};
+    })();
+    setSessionLogs(newLogs);
+    saveAll(newDrills, null, newLogs, undefined);
   };
 
   const handleTimerComplete = (id, sec) => {
@@ -971,14 +1058,23 @@ export default function App() {
     return { added, updated, total:newSheetDrills.length };
   };
 
+  // drills変化時にFirebase保存（シート同期後など）
+  useEffect(() => {
+    if (syncStatus === "synced") {
+      debouncedSave({ drills, routines, sessionLogs, memo: { [today]: memo } });
+    }
+  }, [drills]);
+
   const saveDrill = (d) => {
-    if (d.id) setDrills(p=>p.map(x=>x.id===d.id?{...d}:x));
-    else setDrills(p=>[...p,{...d, id:uid(), lastDone:null, history:[]}]);
+    const newDrills = d.id ? drills.map(x=>x.id===d.id?{...d}:x) : [...drills,{...d, id:uid(), lastDone:null, history:[]}];
+    setDrills(newDrills);
+    saveAll(newDrills, null, null, undefined);
     setEditDrill(null);
   };
   const saveRoutine = (r) => {
-    if (r.id) setRoutines(p=>p.map(x=>x.id===r.id?r:x));
-    else setRoutines(p=>[...p,{...r,id:uid()}]);
+    const newRoutines = r.id ? routines.map(x=>x.id===r.id?r:x) : [...routines,{...r,id:uid()}];
+    setRoutines(newRoutines);
+    saveAll(null, newRoutines, null, undefined);
     setEditRoutine(null);
   };
   const addToToday = (id) => {
@@ -1004,7 +1100,12 @@ export default function App() {
         <div className="hd">
           <div className="hd-in">
             <div><div className="logo">柔術ドリル</div><div className="logo-s">BJJ Solo Drill Tracker</div></div>
-            <div style={{fontSize:11,color:"var(--muted)"}}>{drills.length}件 · {drills.filter(d=>d.fromSheet).length}シート</div>
+            <div style={{fontSize:11,color:"var(--muted)",display:"flex",alignItems:"center",gap:6}}>
+              {syncStatus==="connecting"&&<span style={{color:"#999"}}>⏳ 接続中...</span>}
+              {syncStatus==="synced"&&<span style={{color:"var(--accent-m)"}}>☁️ 同期済み</span>}
+              {syncStatus==="error"&&<span style={{color:"var(--danger)"}}>⚠️ オフライン</span>}
+              <span>{drills.length}件</span>
+            </div>
           </div>
         </div>
 
@@ -1033,7 +1134,7 @@ export default function App() {
                     elapsed={elapsed[d.id]}
                     onToggle={()=>markDone(d.id)}
                     onTimer={()=>setTimerDrill(d)}
-                    onUnfix={()=>setDrills(p=>p.map(x=>x.id===d.id?{...x,fixed:false,fixedBySheet:false}:x))}
+                    onUnfix={()=>{ const nd=drills.map(x=>x.id===d.id?{...x,fixed:false,fixedBySheet:false}:x); setDrills(nd); saveAll(nd,null,null,undefined); }}
                     onDelete={()=>{}} onEdit={()=>{}}/>
                 ))}
                 <hr className="dv"/>
@@ -1062,7 +1163,7 @@ export default function App() {
 
             <div className="memo-area">
               <div className="memo-l">📝 今日のメモ</div>
-              <textarea className="mi" placeholder="今日の練習の気づき..." value={memo} onChange={e=>setMemo(e.target.value)}/>
+              <textarea className="mi" placeholder="今日の練習の気づき..." value={memo} onChange={e=>{setMemo(e.target.value);debouncedSave({memo:{[today]:e.target.value}});}}/>
             </div>
           </div>
         )}
@@ -1136,8 +1237,8 @@ export default function App() {
             {filteredDrills.map(d=>(
               <DrillCard key={d.id} drill={d} mode="manage"
                 onToggle={()=>{}} onTimer={()=>{}}
-                onUnfix={()=>setDrills(p=>p.map(x=>x.id===d.id?{...x,fixed:!x.fixed,fixedBySheet:false}:x))}
-                onDelete={()=>setDrills(p=>p.filter(x=>x.id!==d.id))}
+                onUnfix={()=>{ const nd=drills.map(x=>x.id===d.id?{...x,fixed:!x.fixed,fixedBySheet:false}:x); setDrills(nd); saveAll(nd,null,null,undefined); }}
+                onDelete={()=>{ const nd=drills.filter(x=>x.id!==d.id); setDrills(nd); saveAll(nd,null,null,undefined); }}
                 onEdit={()=>setEditDrill(d)}/>
             ))}
           </div>
