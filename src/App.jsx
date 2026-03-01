@@ -105,7 +105,7 @@ const rowToDrill = (row) => {
     youtubeUrl: videos[0]||"",
     youtubeUrl2: videos[1]||"",
     youtubeUrl3: videos[2]||"",
-    imageUrl: toDriveImg(get(COL.IMAGE)),
+    imageUrl: "",  // 画像は使用しない
     priority: get(COL.PRIORITY),
     stars: starCount(get(COL.PRIORITY)),
     fixedBySheet: isFixed(get(COL.PRIORITY)),
@@ -411,6 +411,57 @@ function TimerModal({ drill, onClose, onComplete }) {
   );
 }
 
+// ─── Video Player Component ───────────────────────────────────────────────────
+function VideoPlayer({ videos }) {
+  const [openIdx, setOpenIdx] = useState(null);
+
+  const toEmbedUrl = (url) => {
+    if (!url) return "";
+    // Google Drive
+    const drive = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+    if (drive) return `https://drive.google.com/file/d/${drive[1]}/preview`;
+    // YouTube (通常URL・短縮URL・shorts)
+    const yt = url.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+    if (yt) return `https://www.youtube.com/embed/${yt[1]}`;
+    // Vimeo
+    const vimeo = url.match(/vimeo\.com\/(\d+)/);
+    if (vimeo) return `https://player.vimeo.com/video/${vimeo[1]}`;
+    return url;
+  };
+
+  const toggle = (i) => setOpenIdx(prev => prev === i ? null : i);
+
+  return (
+    <div style={{marginTop:8,display:"flex",flexDirection:"column",gap:6}}>
+      {videos.map((url, i) => (
+        <div key={i}>
+          <button
+            onClick={()=>toggle(i)}
+            style={{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"8px 12px",
+              background:openIdx===i?"var(--accent)":"var(--accent-l)",
+              color:openIdx===i?"white":"var(--accent)",
+              border:"none",borderRadius:6,cursor:"pointer",fontSize:13,fontWeight:500,textAlign:"left",transition:"all .15s"}}>
+            <span>{openIdx===i?"▼":"▶"}</span>
+            <span>動画{i+1}</span>
+            {openIdx===i&&<span style={{marginLeft:"auto",fontSize:11,opacity:.8}}>タップで閉じる</span>}
+          </button>
+          {openIdx===i&&(
+            <div style={{marginTop:4,borderRadius:6,overflow:"hidden",background:"#000",
+              position:"relative",width:"100%",paddingTop:"56.25%"}}>
+              <iframe
+                src={toEmbedUrl(url)}
+                style={{position:"absolute",top:0,left:0,width:"100%",height:"100%",border:"none"}}
+                allow="autoplay"
+                allowFullScreen
+              />
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── Drill Card (共通) ────────────────────────────────────────────────────────
 function DrillCard({ drill, mode, done, elapsed, selected, onToggle, onTimer, onUnfix, onDelete, onEdit }) {
   const [open, setOpen] = useState(false);
@@ -518,13 +569,29 @@ function SheetsPanel({ drills, onSync }) {
 
   const extractId = url => { const m=url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/); return m?m[1]:null; };
 
+  // トークンをlocalStorageに保存（7日間）
+  const TOKEN_KEY = "gsheet_token";
+  const TOKEN_EXP_KEY = "gsheet_token_exp";
+  const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+
+  useEffect(() => {
+    const saved = localStorage.getItem(TOKEN_KEY);
+    const exp = parseInt(localStorage.getItem(TOKEN_EXP_KEY)||"0");
+    if (saved && Date.now() < exp) {
+      setToken(saved); setStatus("connected"); setMsg("✅ 自動ログイン済み");
+    }
+  }, []);
+
   const login = () => {
     if (!window.google) { setMsg("Google APIが読み込まれていません。"); setStatus("error"); return; }
     const client = window.google.accounts.oauth2.initTokenClient({
       client_id: GOOGLE_CLIENT_ID, scope: SCOPES,
       callback: (resp) => {
         if (resp.error) { setStatus("error"); setMsg("ログイン失敗: "+resp.error); return; }
-        setToken(resp.access_token); setStatus("connected"); setMsg("✅ 接続しました");
+        setToken(resp.access_token);
+        localStorage.setItem(TOKEN_KEY, resp.access_token);
+        localStorage.setItem(TOKEN_EXP_KEY, String(Date.now() + SEVEN_DAYS));
+        setStatus("connected"); setMsg("✅ 接続しました（7日間ログイン維持）");
       },
     });
     client.requestAccessToken();
@@ -532,6 +599,8 @@ function SheetsPanel({ drills, onSync }) {
 
   const logout = () => {
     if (token&&window.google) window.google.accounts.oauth2.revoke(token);
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(TOKEN_EXP_KEY);
     setToken(null); setStatus("disconnected"); setMsg("");
   };
 
@@ -826,14 +895,24 @@ function SearchTab({ drills, onAddToToday }) {
       });
   }, [drills, q, cat, action, position, series, sortBy]);
 
-  const FilterRow = ({label, values, current, onChange}) => (
-    <div style={{marginBottom:8}}>
-      <div style={{fontSize:11,color:"var(--muted)",marginBottom:4,fontWeight:500}}>{label}</div>
-      <div style={{display:"flex",gap:5,flexWrap:"nowrap",overflowX:"auto",paddingBottom:3,scrollbarWidth:"none"}}>
-        {values.map(v=><div key={v} className={`fc ${current===v?"on":""}`} style={{flexShrink:0,fontSize:11}} onClick={()=>onChange(v)}>{v==="すべて"?"すべて":v.replace(/^\d+\./,"")}</div>)}
+  const FilterRow = ({label, values, current, onChange}) => {
+    const rowRef = useRef(null);
+    const dragging = useRef(false);
+    const startX = useRef(0);
+    const scrollLeft = useRef(0);
+    const onMouseDown = (e) => { dragging.current=true; startX.current=e.pageX-rowRef.current.offsetLeft; scrollLeft.current=rowRef.current.scrollLeft; rowRef.current.style.cursor="grabbing"; };
+    const onMouseUp = () => { dragging.current=false; if(rowRef.current) rowRef.current.style.cursor="grab"; };
+    const onMouseMove = (e) => { if(!dragging.current||!rowRef.current) return; e.preventDefault(); const x=e.pageX-rowRef.current.offsetLeft; const walk=(x-startX.current)*1.5; rowRef.current.scrollLeft=scrollLeft.current-walk; };
+    return (
+      <div style={{marginBottom:8}}>
+        <div style={{fontSize:11,color:"var(--muted)",marginBottom:4,fontWeight:500}}>{label}</div>
+        <div ref={rowRef} style={{display:"flex",gap:5,flexWrap:"nowrap",overflowX:"auto",paddingBottom:3,scrollbarWidth:"none",cursor:"grab",userSelect:"none"}}
+          onMouseDown={onMouseDown} onMouseUp={onMouseUp} onMouseLeave={onMouseUp} onMouseMove={onMouseMove}>
+          {values.map(v=><div key={v} className={`fc ${current===v?"on":""}`} style={{flexShrink:0,fontSize:11}} onClick={()=>onChange(v)}>{v==="すべて"?"すべて":v.replace(/^\d+\./,"")}</div>)}
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div>
