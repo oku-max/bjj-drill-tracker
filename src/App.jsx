@@ -134,7 +134,7 @@ body{background:var(--bg);font-family:'Noto Sans JP',sans-serif;color:var(--text
 .hd-in{display:flex;align-items:center;justify-content:space-between;}
 .logo{font-family:'Shippori Mincho',serif;font-size:18px;font-weight:600;color:var(--accent);}
 .logo-s{font-family:'DM Mono',monospace;font-size:10px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;}
-.nav{display:flex;border-bottom:1px solid var(--border);background:var(--surface);padding:0 16px;flex-wrap:wrap;}
+.nav{display:flex;border-bottom:1px solid var(--border);background:var(--surface);padding:0 16px;flex-wrap:wrap;position:sticky;top:57px;z-index:29;}
 .nt{padding:10px 12px;font-size:12px;font-weight:500;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;transition:all .15s;}
 .nt:hover{color:var(--text);}
 .nt.on{color:var(--accent);border-bottom-color:var(--accent);}
