@@ -549,6 +549,11 @@ function SheetsPanel({ drills, onSync }) {
     const exp = parseInt(localStorage.getItem(TOKEN_EXP_KEY)||"0");
     if (saved && Date.now() < exp) {
       setToken(saved); setStatus("connected"); setMsg("✅ 自動ログイン済み");
+    } else if (saved) {
+      // トークン期限切れ → クリア
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(TOKEN_EXP_KEY);
+      setStatus("disconnected"); setMsg("⚠️ ログインの有効期限が切れました。再ログインしてください。");
     }
   }, []);
 
@@ -586,7 +591,17 @@ function SheetsPanel({ drills, onSync }) {
         `https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${range}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
-      if (!res.ok) { const e=await res.json(); throw new Error(e.error?.message||"取得失敗"); }
+      if (!res.ok) {
+        const e=await res.json();
+        const errMsg = e.error?.message||"取得失敗";
+        if (res.status===401) {
+          // 認証エラー → トークンクリア
+          localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(TOKEN_EXP_KEY);
+          setToken(null); setStatus("disconnected");
+          throw new Error("認証エラー: 再ログインしてください（Googleトークンが期限切れです）");
+        }
+        throw new Error(errMsg);
+      }
       const data = await res.json();
       const rows = (data.values||[]).slice(1);
       const drillRows = rows.filter(row=>{
@@ -1109,7 +1124,11 @@ export default function App() {
       if (snap.exists()) {
         const data = snap.data();
         if (data.drills) setDrills(data.drills);
-        if (data.routines) setRoutines(data.routines);
+        if (data.routines) {
+          // nameが空のルーティンを除外 or 修正
+          const validRoutines = data.routines.filter(r=>r&&(r.name||r.id));
+          setRoutines(validRoutines.length>0 ? validRoutines : data.routines);
+        }
         if (data.sessionLogs) setSessionLogs(data.sessionLogs);
         if (data.memo) setMemo(data.memo[today] || "");
         setSyncStatus("synced");
