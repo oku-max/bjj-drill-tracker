@@ -39,19 +39,16 @@ const toDriveImg = (url) => {
 };
 
 // Google Drive動画URLをpreview用に変換
-const toDriveEmbed = (url) => {
   if (!url) return "";
   const m = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
   return m ? `https://drive.google.com/file/d/${m[1]}/preview` : url;
 };
 
 // URLがDrive動画かどうか判定
-const isDriveVideo = (url) => {
   return url && url.includes("drive.google.com");
 };
 
 // YouTubeのサムネイルURL取得
-const ytThumb = (url) => {
   if (!url) return "";
   const m = url.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
   return m ? `https://img.youtube.com/vi/${m[1]}/mqdefault.jpg` : "";
@@ -504,32 +501,9 @@ function DrillCard({ drill, mode, done, elapsed, selected, onToggle, onTimer, on
 
       {open&&(
         <div className="detail">
-          {/* Drive動画またはYouTubeサムネイル表示 */}
-          {videos.length>0&&isDriveVideo(videos[0])&&(
-            <div style={{marginBottom:10}}>
-              <iframe
-                src={toDriveEmbed(videos[0])}
-                style={{width:"100%",height:200,borderRadius:6,border:"1px solid var(--border)"}}
-                allow="autoplay"
-                allowFullScreen
-              />
-            </div>
-          )}
-          {videos.length>0&&!isDriveVideo(videos[0])&&ytThumb(videos[0])&&(
-            <img className="detail-img" src={ytThumb(videos[0])} alt={drill.name} onError={e=>e.target.style.display='none'}/>
-          )}
-          {drill.imageUrl&&!isDriveVideo(drill.imageUrl)&&<img className="detail-img" src={drill.imageUrl} alt={drill.name} onError={e=>e.target.style.display='none'}/>}
           {drill.series&&<div className="detail-series">📚 {drill.series}</div>}
           {drill.sheetMemo&&<div className="detail-memo">{drill.sheetMemo}</div>}
-          {videos.length>0&&(
-            <div className="detail-vids">
-              {videos.map((url,i)=>(
-                isDriveVideo(url)
-                  ? i===0 ? null : <a key={i} href={url} target="_blank" rel="noreferrer" className="vid-link">{Ic.link} 動画{i+1}を開く</a>
-                  : <a key={i} href={url} target="_blank" rel="noreferrer" className="vid-link">{Ic.link} 動画{i+1}を開く</a>
-              ))}
-            </div>
-          )}
+          {videos.length>0&&<VideoPlayer videos={videos}/>}
           {hist.length>0&&(
             <div className="detail-hist">
               <div className="hist-title">📅 実施履歴（直近10回）</div>
