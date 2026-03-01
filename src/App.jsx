@@ -944,12 +944,15 @@ function SearchTab({ drills, routines, onAddToToday, onDeleteDrills, onCreateRou
             {showRoutineMenu&&(
               <div style={{position:"absolute",top:"100%",left:0,background:"var(--surface)",border:"1px solid var(--border)",borderRadius:8,minWidth:200,boxShadow:"0 4px 16px rgba(0,0,0,.12)",zIndex:30,overflow:"hidden"}}>
                 <div style={{padding:"8px 12px",fontSize:11,color:"var(--muted)",borderBottom:"1px solid var(--border)"}}>ルーティンに追加</div>
-                {routines.map(r=>(
-                  <div key={r.id} style={{padding:"10px 14px",fontSize:13,cursor:"pointer",borderBottom:"1px solid var(--border)"}}
-                    onClick={()=>{ onAddToRoutine(r.id, selectedIds); setShowRoutineMenu(false); clearSelect(); }}>
-                    {r.name}
-                  </div>
-                ))}
+                {(routines||[]).length===0
+                  ? <div style={{padding:"10px 14px",fontSize:12,color:"var(--muted)"}}>ルーティンなし</div>
+                  : (routines||[]).map(r=>(
+                    <div key={r.id} style={{padding:"10px 14px",fontSize:13,cursor:"pointer",borderBottom:"1px solid var(--border)"}}
+                      onClick={()=>{ onAddToRoutine(r.id, selectedIds); setShowRoutineMenu(false); clearSelect(); }}>
+                      {r.name}
+                    </div>
+                  ))
+                }
                 <div style={{padding:"10px 14px",fontSize:13,cursor:"pointer",color:"var(--accent)",fontWeight:500}}
                   onClick={()=>{ onCreateRoutine(selectedIds); setShowRoutineMenu(false); clearSelect(); }}>
                   {Ic.plus} 新規ルーティン作成
@@ -985,16 +988,19 @@ function RoutineForm({ routine, drills, onSave, onCancel }) {
   const [cat, setCat] = useState("すべて");
   const [action, setAction] = useState("すべて");
   const [pos, setPos] = useState("すべて");
+  const [ser, setSer] = useState("すべて");
   const [q, setQ] = useState("");
   const set = (k,v) => setF(p=>({...p,[k]:v}));
   const toggle = id => {
     const ids = f.drillIds.map(String);
     set("drillIds", ids.includes(String(id)) ? ids.filter(x=>x!==String(id)) : [...ids, String(id)]);
   };
+  const seriesList = ["すべて",...new Set(drills.map(d=>d.series).filter(Boolean))];
   const filtered = drills.filter(d=>{
     if (cat!=="すべて"&&d.category!==cat) return false;
     if (action!=="すべて"&&!(d.action||"").includes(action)) return false;
     if (pos!=="すべて"&&!(d.position||"").includes(pos.replace(/^\d+\./,"").trim())) return false;
+    if (ser!=="すべて"&&d.series!==ser) return false;
     if (q&&!d.name.includes(q)&&!(d.sheetMemo||"").includes(q)) return false;
     return true;
   });
@@ -1016,6 +1022,7 @@ function RoutineForm({ routine, drills, onSave, onCancel }) {
           <FilterRow label="トップ・ボトム" values={CATEGORIES} current={cat} onChange={setCat}/>
           <FilterRow label="アクション" values={ACTIONS} current={action} onChange={setAction}/>
           <FilterRow label="ポジション" values={POSITIONS} current={pos} onChange={setPos}/>
+          <FilterRow label="シリーズ" values={seriesList} current={ser} onChange={setSer}/>
           <div className="dpick">
             {filtered.map(d=>{
               const picked = f.drillIds.map(String).includes(String(d.id));
