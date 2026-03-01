@@ -174,6 +174,7 @@ body{background:var(--bg);font-family:'Noto Sans JP',sans-serif;color:var(--text
 .detail{padding:10px 14px 12px;border-top:1px solid var(--border);background:var(--bg);}
 .detail-img{width:100%;max-height:180px;object-fit:cover;border-radius:6px;margin-bottom:10px;border:1px solid var(--border);}
 .detail-memo{font-size:12px;line-height:1.75;color:var(--text);white-space:pre-wrap;}
+.card-memo{font-size:12px;line-height:1.6;color:var(--muted);margin-top:5px;padding-top:5px;border-top:1px solid var(--border);white-space:pre-wrap;}
 .detail-series{font-size:11px;color:var(--muted);margin-bottom:6px;font-family:'DM Mono',monospace;}
 .detail-vids{display:flex;flex-direction:column;gap:5px;margin-top:8px;}
 .vid-link{display:inline-flex;align-items:center;gap:6px;color:var(--accent);font-size:12px;text-decoration:none;padding:5px 10px;background:var(--accent-l);border-radius:6px;}
@@ -491,6 +492,7 @@ function DrillCard({ drill, mode, done, elapsed, selected, onToggle, onTimer, on
               {hist.length>0&&` · 計${hist.length}回`}
               {mode==="today"&&` · 目標 ${fmtTime(drill.targetSeconds||60)}`}
             </div>
+            {drill.sheetMemo&&<div className="card-memo">{drill.sheetMemo}</div>}
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:4,flexShrink:0}}>
             {mode==="today"&&<button className="btn btn-o btn-xs" onClick={onTimer}>{Ic.timer}</button>}
@@ -502,7 +504,6 @@ function DrillCard({ drill, mode, done, elapsed, selected, onToggle, onTimer, on
       {open&&(
         <div className="detail">
           {drill.series&&<div className="detail-series">📚 {drill.series}</div>}
-          {drill.sheetMemo&&<div className="detail-memo">{drill.sheetMemo}</div>}
           {videos.length>0&&<VideoPlayer videos={videos}/>}
           {hist.length>0&&(
             <div className="detail-hist">
