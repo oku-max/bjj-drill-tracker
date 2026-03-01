@@ -18,7 +18,7 @@ const dbRef = () => doc(db, "users", USER_ID);
 
 // ─── Google OAuth Config ───────────────────────────────────────────────────────
 const GOOGLE_CLIENT_ID = "761507724767-f0rmd48c8k5js8bnv8ufb0hrmdkl4hna.apps.googleusercontent.com";
-const SCOPES = "https://www.googleapis.com/auth/spreadsheets.readonly";
+const SCOPES = "https://www.googleapis.com/auth/spreadsheets";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const today = new Date().toISOString().split("T")[0];
@@ -55,6 +55,8 @@ const COL = {
   DRILL:    22,  // W列: Drillチェック
   MEMO:     23,  // X列: ドリル用メモ
   REF_URL:  24,  // Y列: Reference URL (OneNote/Notion)
+  LAST_DONE:25,  // Z列: 最終実施日（アプリから書き戻し）
+  DONE_CNT: 26,  // AA列: 実施回数（アプリから書き戻し）
   IMAGE:    33,  // AH列: 画像URL
 };
 
@@ -95,6 +97,7 @@ const rowToDrill = (row) => {
     stars: starCount(get(COL.PRIORITY)),
     fixedBySheet: isFixed(get(COL.PRIORITY)),
     fromSheet: true,
+    drillActive: true,  // W列チェック済み（アプリ上での管理フラグ）
   };
 };
 
@@ -448,7 +451,7 @@ function VideoPlayer({ videos }) {
 }
 
 // ─── Drill Card (共通) ────────────────────────────────────────────────────────
-function DrillCard({ drill, mode, done, elapsed, selected, onToggle, onTimer, onUnfix, onDelete, onEdit }) {
+function DrillCard({ drill, mode, done, elapsed, selected, onToggle, onTimer, onUnfix, onDelete, onEdit, onMemoChange, onStarChange, onDrillToggle }) {
   const [open, setOpen] = useState(false);
   const hist = drill.history || [];
   const videos = [drill.youtubeUrl, drill.youtubeUrl2, drill.youtubeUrl3].filter(Boolean);
@@ -500,6 +503,38 @@ function DrillCard({ drill, mode, done, elapsed, selected, onToggle, onTimer, on
                   <span key={i} className="hist-chip">{h.date} {h.sec?fmtTime(h.sec):""}</span>
                 ))}
               </div>
+            </div>
+          )}
+          {/* メモ・★ インライン編集 */}
+          {onDrillToggle&&drill.fromSheet&&(
+            <div style={{marginTop:10,padding:"8px 12px",background:"#fff8f8",borderRadius:6,border:"1px solid #f0d0d0",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+              <div>
+                <div style={{fontSize:12,fontWeight:500,color:"var(--danger)"}}>ドリルリストから外す</div>
+                <div style={{fontSize:11,color:"var(--muted)"}}>次回「書き戻し」時にW列のチェックが解除されます</div>
+              </div>
+              <button className="btn btn-sm" style={{background:"var(--danger)",color:"white",border:"none",flexShrink:0}}
+                onClick={()=>{ if(window.confirm(`「${drill.name}」をドリルリストから外しますか？`)) onDrillToggle(drill.id); }}>
+                外す
+              </button>
+            </div>
+          )}
+          {onMemoChange&&(
+            <div style={{marginTop:10}}>
+              <div style={{fontSize:11,color:"var(--muted)",marginBottom:4,fontWeight:500}}>メモ編集</div>
+              <textarea className="mi" style={{minHeight:60,fontSize:12}}
+                value={drill.sheetMemo||""}
+                onChange={e=>onMemoChange(drill.id, e.target.value)}
+                placeholder="メモを入力..."/>
+            </div>
+          )}
+          {onStarChange&&(
+            <div style={{marginTop:8,display:"flex",alignItems:"center",gap:8}}>
+              <div style={{fontSize:11,color:"var(--muted)",fontWeight:500}}>優先度：</div>
+              {[0,1,2,3,4,5].map(n=>(
+                <span key={n} style={{cursor:"pointer",fontSize:18,color:n<=(drill.stars||0)?"var(--gold)":"var(--border-s)"}}
+                  onClick={()=>onStarChange(drill.id, n)}>★</span>
+              ))}
+              <span style={{fontSize:11,color:"var(--muted)"}}>({drill.stars||0})</span>
             </div>
           )}
           {drill.refUrl&&(
@@ -623,6 +658,90 @@ function SheetsPanel({ drills, onSync }) {
   const statusClass = {connected:"connected",disconnected:"disconnected",loading:"loading",error:"error"}[status];
   const dotClass = {connected:"green",disconnected:"gray",loading:"blue",error:"red"}[status];
 
+  // ── 書き戻し機能 ────────────────────────────────────────────────────────────
+  const writeBack = async () => {
+    const id = extractId(sheetUrl);
+    if (!id) { setMsg("URLが正しくありません"); setStatus("error"); return; }
+    if (!token) { setMsg("先にログインしてください"); return; }
+
+    // シートから行番号マップを取得（A列のsheetIdで行を特定）
+    setStatus("loading"); setMsg("書き戻し中...");
+    try {
+      const range = encodeURIComponent(`${sheetName}!A:A`);
+      const res = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${range}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!res.ok) {
+        if (res.status===401) { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(TOKEN_EXP_KEY); setToken(null); setStatus("disconnected"); throw new Error("認証エラー: 再ログインしてください"); }
+        throw new Error("シート読み込み失敗");
+      }
+      const data = await res.json();
+      const rows = data.values || [];
+
+      // sheetId → 行番号マップ（1-indexed, 1行目はヘッダー）
+      const rowMap = {};
+      rows.forEach((row, i) => {
+        if (i === 0) return; // ヘッダー行スキップ
+        const sid = (row[0]||"").toString().trim();
+        if (sid) rowMap[sid] = i + 1; // Sheets APIは1-indexed
+      });
+
+      // 書き戻すドリルを収集
+      const sheetDrills = drills.filter(d => d.fromSheet && d.sheetId && rowMap[d.sheetId]);
+      if (sheetDrills.length === 0) { setStatus("error"); setMsg("書き戻し対象のドリルが見つかりません"); return; }
+
+      // バッチ更新データを構築
+      // O列=15(index14), X列=24(index23), Z列=26(index25), AA列=27(index26)
+      // Sheets APIの列: A=1, O=15, X=24, Z=26, AA=27
+      const colLetter = (n) => {
+        let s = "";
+        while (n > 0) { s = String.fromCharCode(64 + (n % 26 || 26)) + s; n = Math.floor((n - 1) / 26); }
+        return s;
+      };
+      const O = colLetter(15); // O列: 優先度
+      const X = colLetter(24); // X列: メモ
+      const Z = colLetter(26); // Z列: 最終実施日
+      const AA = colLetter(27); // AA列: 実施回数
+
+      const valueRanges = [];
+      sheetDrills.forEach(d => {
+        const row = rowMap[d.sheetId];
+        const stars = d.stars || 0;
+        const starStr = "★".repeat(stars);
+
+        // O列: 優先度（★の数で表現）
+        valueRanges.push({ range:`${sheetName}!${O}${row}`, values:[[starStr]] });
+        // W列: ドリルチェック（drillActive=falseなら空白に）
+        const W = colLetter(23);
+        valueRanges.push({ range:`${sheetName}!${W}${row}`, values:[[d.drillActive===false?"":"TRUE"]] });
+        // X列: メモ
+        valueRanges.push({ range:`${sheetName}!${X}${row}`, values:[[d.sheetMemo||""]] });
+        // Z列: 最終実施日
+        valueRanges.push({ range:`${sheetName}!${Z}${row}`, values:[[d.lastDone||""]] });
+        // AA列: 実施回数
+        valueRanges.push({ range:`${sheetName}!${AA}${row}`, values:[[(d.history||[]).length]] });
+      });
+
+      // batchUpdate
+      const writeRes = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${id}/values:batchUpdate`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ valueInputOption: "USER_ENTERED", data: valueRanges })
+        }
+      );
+      if (!writeRes.ok) {
+        const e = await writeRes.json();
+        throw new Error(e.error?.message || "書き込み失敗");
+      }
+      const now = new Date().toLocaleString("ja-JP");
+      setStatus("connected");
+      setMsg(`✅ ${sheetDrills.length}件をシートに書き戻しました（${now}）`);
+    } catch(e) { setStatus("error"); setMsg("エラー: " + e.message); }
+  };
+
   return (
     <div>
       <div className="sheets-panel">
@@ -651,9 +770,14 @@ function SheetsPanel({ drills, onSync }) {
               <label className="fl">シート名</label>
               <input className="fi" value={sheetName} onChange={e=>setSheetName(e.target.value)} placeholder="柔術基本技"/>
             </div>
-            <button className="btn btn-p" onClick={fetchSheet} disabled={!sheetUrl}>
-              {Ic.sync} 同期（差分更新）
-            </button>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              <button className="btn btn-p" onClick={fetchSheet} disabled={!sheetUrl}>
+                {Ic.sync} シートから読み込む
+              </button>
+              <button className="btn btn-o" onClick={writeBack} disabled={!sheetUrl}>
+                {Ic.sheets} シートに書き戻す
+              </button>
+            </div>
           </div>
         )}
         {msg&&(
@@ -867,7 +991,7 @@ function FilterRow({label, values, current, onChange, multi=false}) {
 }
 
 // ─── Search Tab ───────────────────────────────────────────────────────────────
-function SearchTab({ drills, routines, onAddToToday, onDeleteDrills, onCreateRoutine, onAddToRoutine, onShowRoutineMenu }) {
+function SearchTab({ drills, routines, onAddToToday, onDeleteDrills, onCreateRoutine, onAddToRoutine, onShowRoutineMenu, onMemoChange, onStarChange, onDrillToggle }) {
   const [q, setQ] = useState("");
   const [cats, setCats] = useState([]);
   const [actions, setActions] = useState([]);
@@ -889,6 +1013,7 @@ function SearchTab({ drills, routines, onAddToToday, onDeleteDrills, onCreateRou
   const filtered = useMemo(()=>{
     return drills
       .filter(d=>{
+        if (d.drillActive===false) return false;
         if (cats.length>0&&!cats.includes(d.category)) return false;
         if (actions.length>0&&!actions.some(a=>(d.action||"").includes(a))) return false;
         if (positions.length>0&&!positions.some(p=>(d.position||"").includes(p.replace(/^\d+\./,"").trim()))) return false;
@@ -971,7 +1096,9 @@ function SearchTab({ drills, routines, onAddToToday, onDeleteDrills, onCreateRou
             <DrillCard key={d.id} drill={d} mode="select"
               selected={selectedIds.includes(String(d.id))}
               onToggle={()=>toggleSelect(d.id)}
-              onTimer={()=>{}} onUnfix={()=>{}} onDelete={()=>{}} onEdit={()=>{}}/>
+              onTimer={()=>{}} onUnfix={()=>{}} onDelete={()=>{}} onEdit={()=>{}}
+              onMemoChange={onMemoChange} onStarChange={onStarChange}
+              onDrillToggle={onDrillToggle}/>
           ))
       }
     </div>
@@ -1142,11 +1269,11 @@ export default function App() {
   // Google API
   useEffect(()=>{ const s=document.createElement("script"); s.src="https://accounts.google.com/gsi/client"; s.async=true; document.head.appendChild(s); },[]);
 
-  const fixedDrills = drills.filter(d=>d.fixed||d.fixedBySheet);
+  const fixedDrills = drills.filter(d=>(d.fixed||d.fixedBySheet)&&d.drillActive!==false);
   const todayExtra = drills.filter(d=>selectedIds.map(String).includes(String(d.id))&&!d.fixed&&!d.fixedBySheet);
   const allToday = [...fixedDrills,...todayExtra];
   const totalElapsed = Object.values(elapsed).reduce((a,b)=>a+b,0);
-  const filteredDrills = drills.filter(d=>filterCat==="すべて"||d.category===filterCat);
+  const filteredDrills = drills.filter(d=>(filterCat==="すべて"||d.category===filterCat)&&d.drillActive!==false);
 
   // Firebase保存ヘルパー
   const saveAll = (newDrills, newRoutines, newLogs, newMemo) => {
@@ -1205,6 +1332,7 @@ export default function App() {
             youtubeUrl2:sd.youtubeUrl2, youtubeUrl3:sd.youtubeUrl3,
             imageUrl:sd.imageUrl, refUrl:sd.refUrl, priority:sd.priority, stars:sd.stars,
             fixedBySheet:sd.fixedBySheet,
+            drillActive: existing.drillActive !== false ? true : false,
           });
           updated++;
         } else {
@@ -1239,6 +1367,21 @@ export default function App() {
   const addToToday = (id) => {
     if (!selectedIds.map(String).includes(String(id))) setSelectedIds(p=>[...p,id]);
     setTab("today");
+  };
+
+  const handleDrillToggle = (id) => {
+    // drillActiveをfalseにする（次回書き戻し時にW列が空白になる）
+    const nd = drills.map(d=>String(d.id)===String(id)?{...d,drillActive:false}:d);
+    setDrills(nd); saveAll(nd,null,null,undefined);
+  };
+
+  const handleMemoChange = (id, memo) => {
+    const nd = drills.map(d=>String(d.id)===String(id)?{...d,sheetMemo:memo}:d);
+    setDrills(nd); saveAll(nd,null,null,undefined);
+  };
+  const handleStarChange = (id, stars) => {
+    const nd = drills.map(d=>String(d.id)===String(id)?{...d,stars}:d);
+    setDrills(nd); saveAll(nd,null,null,undefined);
   };
 
   if (editDrill!==null) return <><style>{CSS}</style><DrillForm drill={editDrill==="new"?null:editDrill} onSave={saveDrill} onCancel={()=>setEditDrill(null)}/></>;
@@ -1329,7 +1472,9 @@ export default function App() {
                     onToggle={()=>markDone(d.id)}
                     onTimer={()=>setTimerDrill(d)}
                     onUnfix={()=>{ const nd=drills.map(x=>x.id===d.id?{...x,fixed:false,fixedBySheet:false}:x); setDrills(nd); saveAll(nd,null,null,undefined); }}
-                    onDelete={()=>{}} onEdit={()=>{}}/>
+                    onDelete={()=>{}} onEdit={()=>{}}
+                    onMemoChange={handleMemoChange} onStarChange={handleStarChange}
+                    onDrillToggle={handleDrillToggle}/>
                 ))}
                 <hr className="dv"/>
               </>
@@ -1351,7 +1496,9 @@ export default function App() {
                     elapsed={elapsed[d.id]}
                     onToggle={()=>markDone(d.id)}
                     onTimer={()=>setTimerDrill(d)}
-                    onUnfix={()=>{}} onDelete={()=>{}} onEdit={()=>{}}/>
+                    onUnfix={()=>{}} onDelete={()=>{}} onEdit={()=>{}}
+                    onMemoChange={handleMemoChange} onStarChange={handleStarChange}
+                    onDrillToggle={handleDrillToggle}/>
                 ))
             }
 
@@ -1415,6 +1562,9 @@ export default function App() {
                 setRoutinesSafe(newRoutines); saveAll(null,newRoutines,null,undefined);
               }}
               onShowRoutineMenu={setRoutineMenuAnchor}
+              onMemoChange={handleMemoChange}
+              onStarChange={handleStarChange}
+              onDrillToggle={handleDrillToggle}
             />
           </div>
         )}
