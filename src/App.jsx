@@ -893,7 +893,7 @@ function SearchTab({ drills, routines, onAddToToday, onDeleteDrills, onCreateRou
         if (sortBy==="history") return (b.history?.length||0)-(a.history?.length||0);
         return 0;
       });
-  }, [drills, q, cat, action, position, series, sortBy]);
+  }, [drills, q, cats, actions, positions, series, sortBy]);
 
   const toggleSelect = (id) => {
     const sid = String(id);
