@@ -54,6 +54,7 @@ const COL = {
   VIDEO3:   18,  // S列: 動画3
   DRILL:    22,  // W列: Drillチェック
   MEMO:     23,  // X列: ドリル用メモ
+  REF_URL:  24,  // Y列: Reference URL (OneNote/Notion)
   IMAGE:    33,  // AH列: 画像URL
 };
 
@@ -89,6 +90,7 @@ const rowToDrill = (row) => {
     youtubeUrl2: videos[1]||"",
     youtubeUrl3: videos[2]||"",
     imageUrl: "",  // 画像は使用しない
+    refUrl: get(COL.REF_URL),
     priority: get(COL.PRIORITY),
     stars: starCount(get(COL.PRIORITY)),
     fixedBySheet: isFixed(get(COL.PRIORITY)),
@@ -132,8 +134,7 @@ body{background:var(--bg);font-family:'Noto Sans JP',sans-serif;color:var(--text
 .hd-in{display:flex;align-items:center;justify-content:space-between;}
 .logo{font-family:'Shippori Mincho',serif;font-size:18px;font-weight:600;color:var(--accent);}
 .logo-s{font-family:'DM Mono',monospace;font-size:10px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;}
-.nav{display:flex;border-bottom:1px solid var(--border);background:var(--surface);padding:0 16px;overflow-x:auto;scrollbar-width:none;}
-.nav::-webkit-scrollbar{display:none;}
+.nav{display:flex;border-bottom:1px solid var(--border);background:var(--surface);padding:0 16px;flex-wrap:wrap;}
 .nt{padding:10px 12px;font-size:12px;font-weight:500;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;transition:all .15s;}
 .nt:hover{color:var(--text);}
 .nt.on{color:var(--accent);border-bottom-color:var(--accent);}
@@ -501,6 +502,14 @@ function DrillCard({ drill, mode, done, elapsed, selected, onToggle, onTimer, on
               </div>
             </div>
           )}
+          {drill.refUrl&&(
+            <a href={drill.refUrl} target="_blank" rel="noreferrer"
+              style={{display:"flex",alignItems:"center",gap:6,marginTop:10,padding:"8px 12px",
+                background:"var(--blue-l)",color:"var(--blue)",borderRadius:6,fontSize:12,
+                textDecoration:"none",fontWeight:500}}>
+              {Ic.link} ノート参照（OneNote / Notion）
+            </a>
+          )}
           {/* アクションボタン */}
           <div className="detail-acts">
             {mode==="today"&&<button className="btn btn-o btn-xs" onClick={onTimer}>{Ic.timer} タイマー</button>}
@@ -820,24 +829,54 @@ function SuggestTab({ drills, onAddToToday }) {
   );
 }
 
-// ─── Search Tab ───────────────────────────────────────────────────────────────
-function SearchTab({ drills, onAddToToday }) {
-  const [q, setQ] = useState("");
-  const [cat, setCat] = useState("すべて");
-  const [action, setAction] = useState("すべて");
-  const [position, setPosition] = useState("すべて");
-  const [series, setSeries] = useState("すべて");
-  const [sortBy, setSortBy] = useState("name");
+// ─── Filter Row (共通) ────────────────────────────────────────────────────────
+// multi=true のとき current は配列、onChange(v) でトグル
+function FilterRow({label, values, current, onChange, multi=false}) {
+  const rowRef = useRef(null);
+  const dragging = useRef(false);
+  const startX = useRef(0);
+  const scrollLeft = useRef(0);
+  const onMouseDown = (e) => { dragging.current=true; startX.current=e.pageX-rowRef.current.offsetLeft; scrollLeft.current=rowRef.current.scrollLeft; rowRef.current.style.cursor="grabbing"; };
+  const onMouseUp = () => { dragging.current=false; if(rowRef.current) rowRef.current.style.cursor="grab"; };
+  const onMouseMove = (e) => { if(!dragging.current||!rowRef.current) return; e.preventDefault(); const x=e.pageX-rowRef.current.offsetLeft; const walk=(x-startX.current)*1.5; rowRef.current.scrollLeft=scrollLeft.current-walk; };
+  const isOn = (v) => multi ? current.includes(v) : current===v;
+  return (
+    <div style={{marginBottom:8}}>
+      <div style={{fontSize:11,color:"var(--muted)",marginBottom:4,fontWeight:500}}>{label}</div>
+      <div ref={rowRef} style={{display:"flex",gap:5,flexWrap:"nowrap",overflowX:"auto",paddingBottom:6,cursor:"grab",userSelect:"none"}}
+        onMouseDown={onMouseDown} onMouseUp={onMouseUp} onMouseLeave={onMouseUp} onMouseMove={onMouseMove}>
+        {values.map(v=><div key={v} className={`fc ${isOn(v)?"on":""}`} style={{flexShrink:0,fontSize:11}} onClick={()=>onChange(v)}>{v==="すべて"?"すべて":v.replace(/^\d+\./,"")}</div>)}
+      </div>
+    </div>
+  );
+}
 
-  const seriesList = useMemo(()=>["すべて",...new Set(drills.map(d=>d.series).filter(Boolean))],[drills]);
+// ─── Search Tab ───────────────────────────────────────────────────────────────
+function SearchTab({ drills, routines, onAddToToday, onDeleteDrills, onCreateRoutine, onAddToRoutine }) {
+  const [q, setQ] = useState("");
+  const [cats, setCats] = useState([]);
+  const [actions, setActions] = useState([]);
+  const [positions, setPositions] = useState([]);
+  const [series, setSeries] = useState([]);
+  const [sortBy, setSortBy] = useState("name");
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [showRoutineMenu, setShowRoutineMenu] = useState(false);
+
+  const seriesList = useMemo(()=>[...new Set(drills.map(d=>d.series).filter(Boolean))],[drills]);
+
+  // トグル関数（配列）
+  const toggleFilter = (setter) => (v) => {
+    if (v==="すべて") { setter([]); return; }
+    setter(prev => prev.includes(v) ? prev.filter(x=>x!==v) : [...prev, v]);
+  };
 
   const filtered = useMemo(()=>{
     return drills
       .filter(d=>{
-        if (cat!=="すべて"&&d.category!==cat) return false;
-        if (action!=="すべて"&&!(d.action||"").includes(action)) return false;
-        if (position!=="すべて"&&!(d.position||"").includes(position.replace(/^\d+\./,"").trim())) return false;
-        if (series!=="すべて"&&d.series!==series) return false;
+        if (cats.length>0&&!cats.includes(d.category)) return false;
+        if (actions.length>0&&!actions.some(a=>(d.action||"").includes(a))) return false;
+        if (positions.length>0&&!positions.some(p=>(d.position||"").includes(p.replace(/^\d+\./,"").trim()))) return false;
+        if (series.length>0&&!series.includes(d.series)) return false;
         if (!q) return true;
         const lq=q.toLowerCase();
         return d.name.toLowerCase().includes(lq)||
@@ -856,24 +895,12 @@ function SearchTab({ drills, onAddToToday }) {
       });
   }, [drills, q, cat, action, position, series, sortBy]);
 
-  const FilterRow = ({label, values, current, onChange}) => {
-    const rowRef = useRef(null);
-    const dragging = useRef(false);
-    const startX = useRef(0);
-    const scrollLeft = useRef(0);
-    const onMouseDown = (e) => { dragging.current=true; startX.current=e.pageX-rowRef.current.offsetLeft; scrollLeft.current=rowRef.current.scrollLeft; rowRef.current.style.cursor="grabbing"; };
-    const onMouseUp = () => { dragging.current=false; if(rowRef.current) rowRef.current.style.cursor="grab"; };
-    const onMouseMove = (e) => { if(!dragging.current||!rowRef.current) return; e.preventDefault(); const x=e.pageX-rowRef.current.offsetLeft; const walk=(x-startX.current)*1.5; rowRef.current.scrollLeft=scrollLeft.current-walk; };
-    return (
-      <div style={{marginBottom:8}}>
-        <div style={{fontSize:11,color:"var(--muted)",marginBottom:4,fontWeight:500}}>{label}</div>
-        <div ref={rowRef} style={{display:"flex",gap:5,flexWrap:"nowrap",overflowX:"auto",paddingBottom:3,scrollbarWidth:"none",cursor:"grab",userSelect:"none"}}
-          onMouseDown={onMouseDown} onMouseUp={onMouseUp} onMouseLeave={onMouseUp} onMouseMove={onMouseMove}>
-          {values.map(v=><div key={v} className={`fc ${current===v?"on":""}`} style={{flexShrink:0,fontSize:11}} onClick={()=>onChange(v)}>{v==="すべて"?"すべて":v.replace(/^\d+\./,"")}</div>)}
-        </div>
-      </div>
-    );
+  const toggleSelect = (id) => {
+    const sid = String(id);
+    setSelectedIds(p => p.includes(sid) ? p.filter(x=>x!==sid) : [...p, sid]);
   };
+
+  const clearSelect = () => setSelectedIds([]);
 
   return (
     <div>
@@ -882,15 +909,16 @@ function SearchTab({ drills, onAddToToday }) {
           placeholder="テクニック名・メモ・タグで検索..."/>
         {q&&<button className="btn btn-g btn-sm" onClick={()=>setQ("")}>{Ic.close}</button>}
       </div>
-      <FilterRow label="トップ・ボトム" values={CATEGORIES} current={cat} onChange={setCat}/>
-      <FilterRow label="アクション" values={ACTIONS} current={action} onChange={setAction}/>
-      <FilterRow label="ポジション" values={POSITIONS} current={position} onChange={setPosition}/>
-      {seriesList.length>1&&<FilterRow label="シリーズ" values={seriesList} current={series} onChange={setSeries}/>}
+      <FilterRow label="トップ・ボトム" values={["すべて",...CATEGORIES.slice(1)]} current={cats} onChange={toggleFilter(setCats)} multi/>
+      <FilterRow label="アクション" values={["すべて",...ACTIONS.slice(1)]} current={actions} onChange={toggleFilter(setActions)} multi/>
+      <FilterRow label="ポジション" values={["すべて",...POSITIONS.slice(1)]} current={positions} onChange={toggleFilter(setPositions)} multi/>
+      {seriesList.length>0&&<FilterRow label="シリーズ" values={["すべて",...seriesList]} current={series} onChange={toggleFilter(setSeries)} multi/>}
+
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,marginTop:6}}>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
           <div className="search-count">{filtered.length}件</div>
-          {(cat!=="すべて"||action!=="すべて"||position!=="すべて"||series!=="すべて"||q)&&
-            <button className="btn btn-g btn-xs" onClick={()=>{setCat("すべて");setAction("すべて");setPosition("すべて");setSeries("すべて");setQ("");}}>リセット</button>}
+          {(cats.length>0||actions.length>0||positions.length>0||series.length>0||q)&&
+            <button className="btn btn-g btn-xs" onClick={()=>{setCats([]);setActions([]);setPositions([]);setSeries([]);setQ("");}}>リセット</button>}
         </div>
         <select className="fi fs" style={{width:"auto",fontSize:12,padding:"4px 24px 4px 8px"}} value={sortBy} onChange={e=>setSortBy(e.target.value)}>
           <option value="name">名前順</option>
@@ -899,13 +927,52 @@ function SearchTab({ drills, onAddToToday }) {
           <option value="history">実施回数順</option>
         </select>
       </div>
+
+      {/* 複数選択時のアクションバー */}
+      {selectedIds.length>0&&(
+        <div style={{position:"sticky",top:0,zIndex:20,background:"var(--accent)",color:"white",padding:"10px 14px",borderRadius:8,marginBottom:10,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+          <span style={{fontSize:13,fontWeight:500}}>{selectedIds.length}件選択中</span>
+          <button className="btn btn-sm" style={{background:"rgba(255,255,255,.2)",color:"white",border:"none"}}
+            onClick={()=>{ selectedIds.forEach(id=>onAddToToday(id)); clearSelect(); }}>
+            {Ic.plus} 今日に追加
+          </button>
+          <div style={{position:"relative"}}>
+            <button className="btn btn-sm" style={{background:"rgba(255,255,255,.2)",color:"white",border:"none"}}
+              onClick={()=>setShowRoutineMenu(p=>!p)}>
+              {Ic.rtn} ルーティン▾
+            </button>
+            {showRoutineMenu&&(
+              <div style={{position:"absolute",top:"100%",left:0,background:"var(--surface)",border:"1px solid var(--border)",borderRadius:8,minWidth:200,boxShadow:"0 4px 16px rgba(0,0,0,.12)",zIndex:30,overflow:"hidden"}}>
+                <div style={{padding:"8px 12px",fontSize:11,color:"var(--muted)",borderBottom:"1px solid var(--border)"}}>ルーティンに追加</div>
+                {routines.map(r=>(
+                  <div key={r.id} style={{padding:"10px 14px",fontSize:13,cursor:"pointer",borderBottom:"1px solid var(--border)"}}
+                    onClick={()=>{ onAddToRoutine(r.id, selectedIds); setShowRoutineMenu(false); clearSelect(); }}>
+                    {r.name}
+                  </div>
+                ))}
+                <div style={{padding:"10px 14px",fontSize:13,cursor:"pointer",color:"var(--accent)",fontWeight:500}}
+                  onClick={()=>{ onCreateRoutine(selectedIds); setShowRoutineMenu(false); clearSelect(); }}>
+                  {Ic.plus} 新規ルーティン作成
+                </div>
+              </div>
+            )}
+          </div>
+          <button className="btn btn-sm" style={{background:"rgba(255,80,80,.3)",color:"white",border:"none",marginLeft:"auto"}}
+            onClick={()=>{ if(window.confirm(`${selectedIds.length}件削除しますか？`)){onDeleteDrills(selectedIds); clearSelect();} }}>
+            {Ic.trash} 削除
+          </button>
+          <button className="btn btn-sm" style={{background:"rgba(255,255,255,.15)",color:"white",border:"none"}}
+            onClick={clearSelect}>{Ic.close}</button>
+        </div>
+      )}
+
       {filtered.length===0
         ? <div className="empty"><div className="empty-i">🔍</div>該当するドリルが見つかりません</div>
         : filtered.map(d=>(
-            <DrillCard key={d.id} drill={d} mode="search"
-              onTimer={()=>{}}
-              onToggle={()=>onAddToToday(d.id)}
-              onUnfix={()=>{}} onDelete={()=>{}} onEdit={()=>{}}/>
+            <DrillCard key={d.id} drill={d} mode="select"
+              selected={selectedIds.includes(String(d.id))}
+              onToggle={()=>toggleSelect(d.id)}
+              onTimer={()=>{}} onUnfix={()=>{}} onDelete={()=>{}} onEdit={()=>{}}/>
           ))
       }
     </div>
@@ -916,13 +983,21 @@ function SearchTab({ drills, onAddToToday }) {
 function RoutineForm({ routine, drills, onSave, onCancel }) {
   const [f, setF] = useState(routine||{name:"",description:"",targetMinutes:30,drillIds:[],tags:[]});
   const [cat, setCat] = useState("すべて");
+  const [action, setAction] = useState("すべて");
+  const [pos, setPos] = useState("すべて");
   const [q, setQ] = useState("");
   const set = (k,v) => setF(p=>({...p,[k]:v}));
   const toggle = id => {
     const ids = f.drillIds.map(String);
     set("drillIds", ids.includes(String(id)) ? ids.filter(x=>x!==String(id)) : [...ids, String(id)]);
   };
-  const filtered = drills.filter(d=>(cat==="すべて"||d.category===cat)&&(!q||d.name.includes(q)));
+  const filtered = drills.filter(d=>{
+    if (cat!=="すべて"&&d.category!==cat) return false;
+    if (action!=="すべて"&&!(d.action||"").includes(action)) return false;
+    if (pos!=="すべて"&&!(d.position||"").includes(pos.replace(/^\d+\./,"").trim())) return false;
+    if (q&&!d.name.includes(q)&&!(d.sheetMemo||"").includes(q)) return false;
+    return true;
+  });
   return (
     <div className="app">
       <div className="hd"><div className="hd-in">
@@ -937,8 +1012,10 @@ function RoutineForm({ routine, drills, onSave, onCancel }) {
         </div>
         <div style={{marginBottom:8}}>
           <div className="sh"><div className="st">ドリル選択 <span style={{fontSize:13,fontWeight:400,color:"var(--muted)"}}>({f.drillIds.length})</span></div></div>
-          <input className="fi" style={{marginBottom:8}} value={q} onChange={e=>setQ(e.target.value)} placeholder="検索..."/>
-          <div className="fb">{CATEGORIES.map(c=><div key={c} className={`fc ${cat===c?"on":""}`} onClick={()=>setCat(c)}>{c}</div>)}</div>
+          <input className="fi" style={{marginBottom:8}} value={q} onChange={e=>setQ(e.target.value)} placeholder="テクニック名・メモ・タグで検索..."/>
+          <FilterRow label="トップ・ボトム" values={CATEGORIES} current={cat} onChange={setCat}/>
+          <FilterRow label="アクション" values={ACTIONS} current={action} onChange={setAction}/>
+          <FilterRow label="ポジション" values={POSITIONS} current={pos} onChange={setPos}/>
           <div className="dpick">
             {filtered.map(d=>{
               const picked = f.drillIds.map(String).includes(String(d.id));
@@ -1117,7 +1194,7 @@ export default function App() {
             position:sd.position, action:sd.action, tags:sd.tags,
             sheetMemo:sd.sheetMemo, youtubeUrl:sd.youtubeUrl,
             youtubeUrl2:sd.youtubeUrl2, youtubeUrl3:sd.youtubeUrl3,
-            imageUrl:sd.imageUrl, priority:sd.priority, stars:sd.stars,
+            imageUrl:sd.imageUrl, refUrl:sd.refUrl, priority:sd.priority, stars:sd.stars,
             fixedBySheet:sd.fixedBySheet,
           });
           updated++;
@@ -1159,9 +1236,8 @@ export default function App() {
   if (editRoutine!==null) return <><style>{CSS}</style><RoutineForm routine={editRoutine==="new"?null:editRoutine} drills={drills} onSave={saveRoutine} onCancel={()=>setEditRoutine(null)}/></>;
 
   const TABS = [
-    ["today","今日"], ["routines","ルーティン"], ["select","選択"],
-    ["manage","管理"], ["search","検索"], ["suggest","おすすめ"],
-    ["progress","進捗"], ["sheets","シート"],
+    ["today","今日"], ["routines","ルーティン"], ["search","検索"],
+    ["suggest","おすすめ"], ["progress","進捗"], ["sync","同期"],
   ];
 
   return (
@@ -1266,7 +1342,7 @@ export default function App() {
                           <div style={{display:"flex",gap:5,marginTop:8}}>
                             <button className="btn btn-p btn-sm" style={{flex:1}} onClick={()=>loadRoutine(r)}>開始</button>
                             <button className="bti" onClick={()=>setEditRoutine(r)}>{Ic.edit}</button>
-                            <button className="bti d" onClick={()=>{if(window.confirm("削除?"))setRoutines(p=>p.filter(x=>x.id!==r.id));}}>{Ic.trash}</button>
+                            <button className="bti d" onClick={()=>{if(window.confirm("削除?")){const nr=routines.filter(x=>x.id!==r.id);setRoutines(nr);saveAll(null,nr,null,undefined);}}}>{Ic.trash}</button>
                           </div>
                         </div>
                       </div>
@@ -1277,50 +1353,23 @@ export default function App() {
           </div>
         )}
 
-        {/* ── SELECT ── */}
-        {tab==="select"&&(
-          <>
-            <div className="content fa">
-              <div className="fb">{CATEGORIES.map(c=><div key={c} className={`fc ${filterCat===c?"on":""}`} onClick={()=>setFilterCat(c)}>{c}</div>)}</div>
-              {filteredDrills.map(d=>(
-                <DrillCard key={d.id} drill={d} mode="select"
-                  selected={selectedIds.map(String).includes(String(d.id))}
-                  onToggle={()=>{
-                    const sid=String(d.id);
-                    setSelectedIds(p=>p.map(String).includes(sid)?p.filter(x=>String(x)!==sid):[...p,d.id]);
-                  }}
-                  onTimer={()=>{}} onUnfix={()=>{}} onDelete={()=>{}} onEdit={()=>{}}/>
-              ))}
-            </div>
-            <div className="ab">
-              <div className="sc"><span>{selectedIds.length}</span> 件選択中</div>
-              <button className="btn btn-p" onClick={()=>setTab("today")} disabled={selectedIds.length===0}>今日に追加 →</button>
-            </div>
-          </>
-        )}
 
-        {/* ── MANAGE ── */}
-        {tab==="manage"&&(
-          <div className="content fa">
-            <div className="sh">
-              <div className="st">ドリル管理</div>
-              <button className="btn btn-p btn-sm" onClick={()=>setEditDrill("new")}>{Ic.plus} 追加</button>
-            </div>
-            <div className="fb">{CATEGORIES.map(c=><div key={c} className={`fc ${filterCat===c?"on":""}`} onClick={()=>setFilterCat(c)}>{c}</div>)}</div>
-            {filteredDrills.map(d=>(
-              <DrillCard key={d.id} drill={d} mode="manage"
-                onToggle={()=>{}} onTimer={()=>{}}
-                onUnfix={()=>{ const nd=drills.map(x=>x.id===d.id?{...x,fixed:!x.fixed,fixedBySheet:false}:x); setDrills(nd); saveAll(nd,null,null,undefined); }}
-                onDelete={()=>{ const nd=drills.filter(x=>x.id!==d.id); setDrills(nd); saveAll(nd,null,null,undefined); }}
-                onEdit={()=>setEditDrill(d)}/>
-            ))}
-          </div>
-        )}
+
+
 
         {/* ── SEARCH ── */}
         {tab==="search"&&(
           <div className="content fa">
-            <SearchTab drills={drills} onAddToToday={addToToday}/>
+            <SearchTab drills={drills} routines={routines}
+              onAddToToday={addToToday}
+              onDeleteDrills={(ids)=>{ const nd=drills.filter(d=>!ids.includes(String(d.id))); setDrills(nd); saveAll(nd,null,null,undefined); }}
+              onCreateRoutine={(ids)=>{ setEditRoutine({name:"",description:"",targetMinutes:30,drillIds:ids,tags:[]}); }}
+              onAddToRoutine={(routineId, ids)=>{
+                const newRoutines = routines.map(r=>r.id===routineId
+                  ?{...r, drillIds:[...new Set([...r.drillIds.map(String),...ids])]}:r);
+                setRoutines(newRoutines); saveAll(null,newRoutines,null,undefined);
+              }}
+            />
           </div>
         )}
 
@@ -1340,7 +1389,7 @@ export default function App() {
         )}
 
         {/* ── SHEETS ── */}
-        {tab==="sheets"&&(
+        {tab==="sync"&&(
           <div className="content fa">
             <div className="sh"><div><div className="st">シート連携</div></div></div>
             <SheetsPanel drills={drills} onSync={syncDrills}/>
