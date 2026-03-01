@@ -38,21 +38,7 @@ const toDriveImg = (url) => {
   return m ? `https://drive.google.com/thumbnail?id=${m[1]}&sz=w400` : url;
 };
 
-// Google Drive動画URLをpreview用に変換
-  if (!url) return "";
-  const m = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
-  return m ? `https://drive.google.com/file/d/${m[1]}/preview` : url;
-};
-
-// URLがDrive動画かどうか判定
-  return url && url.includes("drive.google.com");
-};
-
-// YouTubeのサムネイルURL取得
-  if (!url) return "";
-  const m = url.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
-  return m ? `https://img.youtube.com/vi/${m[1]}/mqdefault.jpg` : "";
-};
+// (動画変換はVideoPlayerコンポーネント内で処理)
 
 // ─── Column Mapping ───────────────────────────────────────────────────────────
 const COL = {
