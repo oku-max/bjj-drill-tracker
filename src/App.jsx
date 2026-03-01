@@ -867,7 +867,7 @@ function FilterRow({label, values, current, onChange, multi=false}) {
 }
 
 // ─── Search Tab ───────────────────────────────────────────────────────────────
-function SearchTab({ drills, routines, onAddToToday, onDeleteDrills, onCreateRoutine, onAddToRoutine }) {
+function SearchTab({ drills, routines, onAddToToday, onDeleteDrills, onCreateRoutine, onAddToRoutine, onShowRoutineMenu }) {
   const [q, setQ] = useState("");
   const [cats, setCats] = useState([]);
   const [actions, setActions] = useState([]);
@@ -876,6 +876,7 @@ function SearchTab({ drills, routines, onAddToToday, onDeleteDrills, onCreateRou
   const [sortBy, setSortBy] = useState("name");
   const [selectedIds, setSelectedIds] = useState([]);
   const [showRoutineMenu, setShowRoutineMenu] = useState(false);
+  const [routineMenuAnchor, setRoutineMenuAnchor] = useState(null);
 
   const seriesList = useMemo(()=>[...new Set(drills.map(d=>d.series).filter(Boolean))],[drills]);
 
@@ -951,30 +952,10 @@ function SearchTab({ drills, routines, onAddToToday, onDeleteDrills, onCreateRou
             onClick={()=>{ selectedIds.forEach(id=>onAddToToday(id)); clearSelect(); }}>
             {Ic.plus} 今日に追加
           </button>
-          <div style={{position:"relative"}}>
-            <button className="btn btn-sm" style={{background:"rgba(255,255,255,.2)",color:"white",border:"none"}}
-              onClick={()=>setShowRoutineMenu(p=>!p)}>
-              {Ic.rtn} ルーティン▾
-            </button>
-            {showRoutineMenu&&(
-              <div style={{position:"absolute",top:"100%",left:0,background:"var(--surface)",border:"1px solid var(--border)",borderRadius:8,minWidth:200,boxShadow:"0 4px 16px rgba(0,0,0,.12)",zIndex:30,overflow:"hidden"}}>
-                <div style={{padding:"8px 12px",fontSize:11,color:"var(--muted)",borderBottom:"1px solid var(--border)"}}>ルーティンに追加（{(routines||[]).length}件）</div>
-                {(routines||[]).length===0
-                  ? <div style={{padding:"10px 14px",fontSize:12,color:"var(--muted)"}}>ルーティンなし</div>
-                  : (routines||[]).map((r,i)=>(
-                    <div key={r.id||i} style={{padding:"10px 14px",fontSize:13,cursor:"pointer",borderBottom:"1px solid var(--border)"}}
-                      onClick={()=>{ onAddToRoutine(r.id, selectedIds); setShowRoutineMenu(false); clearSelect(); }}>
-                      {r.name||"（名前なし）"}
-                    </div>
-                  ))
-                }
-                <div style={{padding:"10px 14px",fontSize:13,cursor:"pointer",color:"var(--accent)",fontWeight:500}}
-                  onClick={()=>{ onCreateRoutine(selectedIds); setShowRoutineMenu(false); clearSelect(); }}>
-                  {Ic.plus} 新規ルーティン作成
-                </div>
-              </div>
-            )}
-          </div>
+          <button className="btn btn-sm" style={{background:"rgba(255,255,255,.2)",color:"white",border:"none"}}
+            onClick={(e)=>{ onShowRoutineMenu({ids:selectedIds, rect:e.currentTarget.getBoundingClientRect()}); }}>
+            {Ic.rtn} ルーティン▾
+          </button>
           <button className="btn btn-sm" style={{background:"rgba(255,80,80,.3)",color:"white",border:"none",marginLeft:"auto"}}
             onClick={()=>{ if(window.confirm(`${selectedIds.length}件削除しますか？`)){onDeleteDrills(selectedIds); clearSelect();} }}>
             {Ic.trash} 削除
@@ -1114,6 +1095,7 @@ export default function App() {
   const [editRoutine, setEditRoutine] = useState(null);
   const [timerDrill, setTimerDrill] = useState(null);
   const [activeRoutine, setActiveRoutine] = useState(null);
+  const [routineMenuAnchor, setRoutineMenuAnchor] = useState(null);
 
   // ── Firebase リアルタイム同期 ────────────────────────────────────────────────
   const [syncStatus, setSyncStatus] = useState("connecting"); // connecting | synced | error
@@ -1273,6 +1255,42 @@ export default function App() {
       <div className="app">
         {timerDrill&&<TimerModal drill={timerDrill} onClose={()=>setTimerDrill(null)} onComplete={sec=>handleTimerComplete(timerDrill.id,sec)}/>}
 
+        {/* ルーティン選択メニュー (SearchTabから呼ばれる) */}
+        {routineMenuAnchor&&(
+          <>
+            <div style={{position:"fixed",inset:0,zIndex:40}} onClick={()=>setRoutineMenuAnchor(null)}/>
+            <div style={{position:"fixed",top:(routineMenuAnchor.rect?.bottom||100)+4,left:routineMenuAnchor.rect?.left||100,
+              background:"var(--surface)",border:"1px solid var(--border)",borderRadius:8,minWidth:220,
+              boxShadow:"0 4px 16px rgba(0,0,0,.18)",zIndex:50,overflow:"hidden"}}>
+              <div style={{padding:"8px 12px",fontSize:11,color:"var(--muted)",borderBottom:"1px solid var(--border)"}}>
+                ルーティンに追加（{routines.length}件）
+              </div>
+              {routines.length===0
+                ? <div style={{padding:"10px 14px",fontSize:12,color:"var(--muted)"}}>ルーティンなし</div>
+                : routines.map(r=>(
+                  <div key={r.id} style={{padding:"10px 14px",fontSize:13,cursor:"pointer",borderBottom:"1px solid var(--border)"}}
+                    onClick={()=>{
+                      const ids = routineMenuAnchor.ids;
+                      const newRoutines = routines.map(rx=>rx.id===r.id
+                        ?{...rx, drillIds:[...new Set([...rx.drillIds.map(String),...ids])]}:rx);
+                      setRoutinesSafe(newRoutines); saveAll(null,newRoutines,null,undefined);
+                      setRoutineMenuAnchor(null);
+                    }}>
+                    {r.name}
+                  </div>
+                ))
+              }
+              <div style={{padding:"10px 14px",fontSize:13,cursor:"pointer",color:"var(--accent)",fontWeight:500,borderTop:"1px solid var(--border)"}}
+                onClick={()=>{
+                  setEditRoutine({name:"",description:"",targetMinutes:30,drillIds:routineMenuAnchor.ids,tags:[]});
+                  setRoutineMenuAnchor(null);
+                }}>
+                {Ic.plus} 新規ルーティン作成
+              </div>
+            </div>
+          </>
+        )}
+
         <div className="hd">
           <div className="hd-in">
             <div><div className="logo">柔術ドリル</div><div className="logo-s">BJJ Solo Drill Tracker</div></div>
@@ -1387,7 +1405,7 @@ export default function App() {
         {/* ── SEARCH ── */}
         {tab==="search"&&(
           <div className="content fa">
-            <SearchTab drills={drills} routines={routinesRef.current}
+            <SearchTab drills={drills} routines={routines}
               onAddToToday={addToToday}
               onDeleteDrills={(ids)=>{ const nd=drills.filter(d=>!ids.includes(String(d.id))); setDrills(nd); saveAll(nd,null,null,undefined); }}
               onCreateRoutine={(ids)=>{ setEditRoutine({name:"",description:"",targetMinutes:30,drillIds:ids,tags:[]}); }}
@@ -1396,6 +1414,7 @@ export default function App() {
                   ?{...r, drillIds:[...new Set([...r.drillIds.map(String),...ids])]}:r);
                 setRoutinesSafe(newRoutines); saveAll(null,newRoutines,null,undefined);
               }}
+              onShowRoutineMenu={setRoutineMenuAnchor}
             />
           </div>
         )}
