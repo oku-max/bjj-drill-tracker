@@ -1102,6 +1102,8 @@ export default function App() {
   const [tab, setTab] = useState("today");
   const [drills, setDrills] = useState(SAMPLE_DRILLS);
   const [routines, setRoutines] = useState(SAMPLE_ROUTINES);
+  const routinesRef = useRef(SAMPLE_ROUTINES);
+  const setRoutinesSafe = (r) => { routinesRef.current = r; setRoutines(r); };
   const [sessionLogs, setSessionLogs] = useState({});
   const [selectedIds, setSelectedIds] = useState([]);
   const [doneIds, setDoneIds] = useState([]);
@@ -1125,9 +1127,8 @@ export default function App() {
         const data = snap.data();
         if (data.drills) setDrills(data.drills);
         if (data.routines) {
-          // nameが空のルーティンを除外 or 修正
-          const validRoutines = data.routines.filter(r=>r&&(r.name||r.id));
-          setRoutines(validRoutines.length>0 ? validRoutines : data.routines);
+          console.log("Firebase routines:", JSON.stringify(data.routines));
+          setRoutinesSafe(data.routines);
         }
         if (data.sessionLogs) setSessionLogs(data.sessionLogs);
         if (data.memo) setMemo(data.memo[today] || "");
@@ -1249,7 +1250,7 @@ export default function App() {
   };
   const saveRoutine = (r) => {
     const newRoutines = r.id ? routines.map(x=>x.id===r.id?r:x) : [...routines,{...r,id:uid()}];
-    setRoutines(newRoutines);
+    setRoutinesSafe(newRoutines);
     saveAll(null, newRoutines, null, undefined);
     setEditRoutine(null);
   };
@@ -1368,7 +1369,7 @@ export default function App() {
                           <div style={{display:"flex",gap:5,marginTop:8}}>
                             <button className="btn btn-p btn-sm" style={{flex:1}} onClick={()=>loadRoutine(r)}>開始</button>
                             <button className="bti" onClick={()=>setEditRoutine(r)}>{Ic.edit}</button>
-                            <button className="bti d" onClick={()=>{if(window.confirm("削除?")){const nr=routines.filter(x=>x.id!==r.id);setRoutines(nr);saveAll(null,nr,null,undefined);}}}>{Ic.trash}</button>
+                            <button className="bti d" onClick={()=>{if(window.confirm("削除?")){const nr=routines.filter(x=>x.id!==r.id);setRoutinesSafe(nr);saveAll(null,nr,null,undefined);}}}>{Ic.trash}</button>
                           </div>
                         </div>
                       </div>
@@ -1386,14 +1387,14 @@ export default function App() {
         {/* ── SEARCH ── */}
         {tab==="search"&&(
           <div className="content fa">
-            <SearchTab drills={drills} routines={routines}
+            <SearchTab drills={drills} routines={routinesRef.current}
               onAddToToday={addToToday}
               onDeleteDrills={(ids)=>{ const nd=drills.filter(d=>!ids.includes(String(d.id))); setDrills(nd); saveAll(nd,null,null,undefined); }}
               onCreateRoutine={(ids)=>{ setEditRoutine({name:"",description:"",targetMinutes:30,drillIds:ids,tags:[]}); }}
               onAddToRoutine={(routineId, ids)=>{
                 const newRoutines = routines.map(r=>r.id===routineId
                   ?{...r, drillIds:[...new Set([...r.drillIds.map(String),...ids])]}:r);
-                setRoutines(newRoutines); saveAll(null,newRoutines,null,undefined);
+                setRoutinesSafe(newRoutines); saveAll(null,newRoutines,null,undefined);
               }}
             />
           </div>
