@@ -943,13 +943,13 @@ function SearchTab({ drills, routines, onAddToToday, onDeleteDrills, onCreateRou
             </button>
             {showRoutineMenu&&(
               <div style={{position:"absolute",top:"100%",left:0,background:"var(--surface)",border:"1px solid var(--border)",borderRadius:8,minWidth:200,boxShadow:"0 4px 16px rgba(0,0,0,.12)",zIndex:30,overflow:"hidden"}}>
-                <div style={{padding:"8px 12px",fontSize:11,color:"var(--muted)",borderBottom:"1px solid var(--border)"}}>ルーティンに追加</div>
+                <div style={{padding:"8px 12px",fontSize:11,color:"var(--muted)",borderBottom:"1px solid var(--border)"}}>ルーティンに追加（{(routines||[]).length}件）</div>
                 {(routines||[]).length===0
                   ? <div style={{padding:"10px 14px",fontSize:12,color:"var(--muted)"}}>ルーティンなし</div>
-                  : (routines||[]).map(r=>(
-                    <div key={r.id} style={{padding:"10px 14px",fontSize:13,cursor:"pointer",borderBottom:"1px solid var(--border)"}}
+                  : (routines||[]).map((r,i)=>(
+                    <div key={r.id||i} style={{padding:"10px 14px",fontSize:13,cursor:"pointer",borderBottom:"1px solid var(--border)"}}
                       onClick={()=>{ onAddToRoutine(r.id, selectedIds); setShowRoutineMenu(false); clearSelect(); }}>
-                      {r.name}
+                      {r.name||"（名前なし）"}
                     </div>
                   ))
                 }
