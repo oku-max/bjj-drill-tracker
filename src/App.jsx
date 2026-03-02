@@ -593,10 +593,10 @@ function DrillCard({ drill, mode, done, elapsed, selected, onToggle, onTimer, on
 }
 
 // ─── Sheets Panel ─────────────────────────────────────────────────────────────
-function SheetsPanel({ drills, onSync, quickAction, onActionDone }) {
-  const [token, setToken] = useState(null);
-  const [sheetUrl, setSheetUrl] = useState(LS.get("sheetUrl",""));
-  const [sheetName, setSheetName] = useState(LS.get("sheetName","柔術基本技"));
+function SheetsPanel({ drills, onSync, quickAction, onActionDone, externalToken, onTokenChange, externalSheetUrl, onSheetUrlChange, externalSheetName, onSheetNameChange }) {
+  const [token, setToken] = useState(externalToken||null);
+  const [sheetUrl, setSheetUrl] = useState(externalSheetUrl||LS.get("sheetUrl",""));
+  const [sheetName, setSheetName] = useState(externalSheetName||LS.get("sheetName","柔術基本技"));
   const [status, setStatus] = useState("disconnected");
   const [msg, setMsg] = useState("");
   const [lastSync, setLastSync] = useState(LS.get("lastSync",""));
@@ -635,8 +635,7 @@ function SheetsPanel({ drills, onSync, quickAction, onActionDone }) {
       callback: (resp) => {
         if (resp.error) { setStatus("error"); setMsg("ログイン失敗: "+resp.error); return; }
         setToken(resp.access_token);
-        localStorage.setItem(TOKEN_KEY, resp.access_token);
-        localStorage.setItem(TOKEN_EXP_KEY, String(Date.now() + SEVEN_DAYS));
+        onTokenChange&&onTokenChange(resp.access_token, Date.now()+SEVEN_DAYS);
         setStatus("connected"); setMsg("✅ 接続しました（7日間ログイン維持）");
       },
     });
@@ -647,7 +646,7 @@ function SheetsPanel({ drills, onSync, quickAction, onActionDone }) {
     if (token&&window.google) window.google.accounts.oauth2.revoke(token);
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(TOKEN_EXP_KEY);
-    setToken(null); setStatus("disconnected"); setMsg("");
+    setToken(null); onTokenChange&&onTokenChange(null); setStatus("disconnected"); setMsg("");
   };
 
   const fetchSheet = async () => {
@@ -803,11 +802,11 @@ function SheetsPanel({ drills, onSync, quickAction, onActionDone }) {
           <div style={{marginTop:14}}>
             <div className="fg">
               <label className="fl">スプレッドシートURL</label>
-              <input className="fi" value={sheetUrl} onChange={e=>setSheetUrl(e.target.value)} placeholder="https://docs.google.com/spreadsheets/d/..."/>
+              <input className="fi" value={sheetUrl} onChange={e=>{setSheetUrl(e.target.value);onSheetUrlChange&&onSheetUrlChange(e.target.value);}} placeholder="https://docs.google.com/spreadsheets/d/..."/>
             </div>
             <div className="fg">
               <label className="fl">シート名</label>
-              <input className="fi" value={sheetName} onChange={e=>setSheetName(e.target.value)} placeholder="柔術基本技"/>
+              <input className="fi" value={sheetName} onChange={e=>{setSheetName(e.target.value);onSheetNameChange&&onSheetNameChange(e.target.value);}} placeholder="柔術基本技"/>
             </div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
               <button className="btn btn-p" onClick={fetchSheet} disabled={!sheetUrl}>
@@ -1273,6 +1272,94 @@ export default function App() {
   const [activeRoutine, setActiveRoutine] = useState(null);
   const [routineMenuAnchor, setRoutineMenuAnchor] = useState(null);
   const [quickAction, setQuickAction] = useState(null); // "read" | "write" | null
+  // Sheet sync state（ヘッダーボタンから直接呼べるよう）
+  const [sheetToken, setSheetToken] = useState(null);
+  const [sheetUrl, setSheetUrl] = useState(()=>LS.get("sheetUrl",""));
+  const [sheetName, setSheetName] = useState(()=>LS.get("sheetName","柔術基本技"));
+  const [sheetMsg, setSheetMsg] = useState("");
+  const [sheetStatus, setSheetStatus] = useState("disconnected");
+  const [sheetLastSync, setSheetLastSync] = useState(LS.get("lastSync",""));
+
+  const TOKEN_KEY = "gsheet_token";
+  const TOKEN_EXP_KEY = "gsheet_token_exp";
+  const extractSheetId = url => { const m=url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/); return m?m[1]:null; };
+  const colLetter = (n) => { let s=""; while(n>0){s=String.fromCharCode(64+(n%26||26))+s;n=Math.floor((n-1)/26);} return s; };
+
+  // トークン自動復元
+  useEffect(()=>{
+    const saved=localStorage.getItem(TOKEN_KEY);
+    const exp=parseInt(localStorage.getItem(TOKEN_EXP_KEY)||"0");
+    if(saved&&Date.now()<exp){ setSheetToken(saved); setSheetStatus("connected"); }
+    else if(saved){ localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(TOKEN_EXP_KEY); }
+  },[]);
+
+  // ヘッダーからのシート読み込み
+  const headerFetchSheet = async () => {
+    const id = extractSheetId(sheetUrl);
+    if(!id||!sheetToken){ setSheetMsg("⚠️ ログインまたはURL未設定"); return; }
+    setSheetStatus("loading"); setSheetMsg("読み込み中...");
+    try {
+      const range = encodeURIComponent(`${sheetName}!A:AH`);
+      const res = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${range}`,
+        {headers:{Authorization:`Bearer ${sheetToken}`}}
+      );
+      if(!res.ok){
+        if(res.status===401){localStorage.removeItem(TOKEN_KEY);localStorage.removeItem(TOKEN_EXP_KEY);setSheetToken(null);setSheetStatus("disconnected");setSheetMsg("⚠️ 再ログインしてください");return;}
+        throw new Error("取得失敗");
+      }
+      const data = await res.json();
+      const rows = (data.values||[]).slice(1);
+      const drillRows = rows.filter(row=>{const v=(row[COL.DRILL]||"").toString().trim().toUpperCase();return v==="TRUE"||v==="1"||v==="✓"||v==="☑";});
+      if(drillRows.length===0){setSheetStatus("error");setSheetMsg("⚠️ W列にチェックが見つかりません");return;}
+      const result = syncDrills(drillRows.map(row=>rowToDrill(row)));
+      const now=new Date().toLocaleString("ja-JP");
+      setSheetLastSync(now); LS.set("lastSync",now);
+      setSheetStatus("connected");
+      setSheetMsg(`✅ ${result.added}件追加、${result.updated}件更新`);
+    } catch(e){ setSheetStatus("error"); setSheetMsg("⚠️ "+e.message); }
+  };
+
+  // ヘッダーからのシート書き戻し
+  const headerWriteBack = async () => {
+    const id = extractSheetId(sheetUrl);
+    if(!id||!sheetToken){ setSheetMsg("⚠️ ログインまたはURL未設定"); return; }
+    setSheetStatus("loading"); setSheetMsg("書き戻し中...");
+    try {
+      const range = encodeURIComponent(`${sheetName}!A:A`);
+      const res = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${range}`,
+        {headers:{Authorization:`Bearer ${sheetToken}`}}
+      );
+      if(!res.ok){if(res.status===401){localStorage.removeItem(TOKEN_KEY);localStorage.removeItem(TOKEN_EXP_KEY);setSheetToken(null);setSheetStatus("disconnected");setSheetMsg("⚠️ 再ログインしてください");return;}throw new Error("失敗");}
+      const data = await res.json();
+      const rows = data.values||[];
+      const rowMap={};
+      rows.forEach((row,i)=>{if(i===0)return;const sid=(row[0]||"").toString().trim();if(sid)rowMap[sid]=i+1;});
+      const targets=drills.filter(d=>d.fromSheet&&d.sheetId&&rowMap[d.sheetId]);
+      if(targets.length===0){setSheetStatus("error");setSheetMsg("⚠️ 書き戻し対象なし");return;}
+      const N=colLetter(14),O=colLetter(15),W=colLetter(23),X=colLetter(24),Z=colLetter(26),AA=colLetter(27);
+      const valueRanges=[];
+      targets.forEach(d=>{
+        const row=rowMap[d.sheetId];
+        valueRanges.push({range:`${sheetName}!${N}${row}`,values:[[d.favorite?"TRUE":""]]});
+        valueRanges.push({range:`${sheetName}!${O}${row}`,values:[[d.proficiency||""]]});
+        valueRanges.push({range:`${sheetName}!${W}${row}`,values:[[d.drillActive===false?"":"TRUE"]]});
+        valueRanges.push({range:`${sheetName}!${X}${row}`,values:[[d.sheetMemo||""]]});
+        valueRanges.push({range:`${sheetName}!${Z}${row}`,values:[[d.lastDone||""]]});
+        valueRanges.push({range:`${sheetName}!${AA}${row}`,values:[[(d.history||[]).length]]});
+      });
+      const writeRes=await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${id}/values:batchUpdate`,
+        {method:"POST",headers:{Authorization:`Bearer ${sheetToken}`,"Content-Type":"application/json"},
+         body:JSON.stringify({valueInputOption:"USER_ENTERED",data:valueRanges})}
+      );
+      if(!writeRes.ok){const e=await writeRes.json();throw new Error(e.error?.message||"書き込み失敗");}
+      const now=new Date().toLocaleString("ja-JP");
+      setSheetStatus("connected");
+      setSheetMsg(`✅ ${targets.length}件書き戻し完了`);
+    } catch(e){ setSheetStatus("error"); setSheetMsg("⚠️ "+e.message); }
+  };
 
   // ── Firebase リアルタイム同期 ────────────────────────────────────────────────
   const [syncStatus, setSyncStatus] = useState("connecting"); // connecting | synced | error
@@ -1500,12 +1587,21 @@ export default function App() {
               {syncStatus==="synced"&&<span style={{color:"var(--accent-m)"}}>☁️ 同期済み</span>}
               {syncStatus==="error"&&<span style={{color:"var(--danger)"}}>⚠️ オフライン</span>}
               <span>{drills.length}件</span>
+              {sheetMsg&&<span style={{fontSize:10,maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
+                color:sheetStatus==="error"?"var(--danger)":sheetStatus==="connected"?"var(--accent-m)":"var(--muted)"}}
+                title={sheetMsg}>{sheetMsg}</span>}
               <button className="btn btn-o btn-xs" title="シートから読み込む"
-                onClick={()=>{ setTab("sync"); setQuickAction("read"); }}
-                style={{padding:"3px 8px",fontSize:11}}>↓ 読込</button>
+                onClick={headerFetchSheet}
+                disabled={!sheetToken||sheetStatus==="loading"}
+                style={{padding:"3px 8px",fontSize:11}}>
+                {sheetStatus==="loading"?"⏳":"↓"} 読込
+              </button>
               <button className="btn btn-o btn-xs" title="シートに書き戻す"
-                onClick={()=>{ setTab("sync"); setQuickAction("write"); }}
-                style={{padding:"3px 8px",fontSize:11}}>↑ 書込</button>
+                onClick={headerWriteBack}
+                disabled={!sheetToken||sheetStatus==="loading"}
+                style={{padding:"3px 8px",fontSize:11}}>
+                {sheetStatus==="loading"?"⏳":"↑"} 書込
+              </button>
             </div>
           </div>
         </div>
@@ -1657,7 +1753,11 @@ export default function App() {
           <div className="content fa">
             <div className="sh"><div><div className="st">シート連携</div></div></div>
             <SheetsPanel drills={drills} onSync={syncDrills}
-              quickAction={quickAction} onActionDone={()=>setQuickAction(null)}/>
+              quickAction={quickAction} onActionDone={()=>setQuickAction(null)}
+              externalToken={sheetToken} onTokenChange={(t,exp)=>{setSheetToken(t);if(t){localStorage.setItem(TOKEN_KEY,t);localStorage.setItem(TOKEN_EXP_KEY,String(exp));}else{localStorage.removeItem(TOKEN_KEY);localStorage.removeItem(TOKEN_EXP_KEY);}}}
+              externalSheetUrl={sheetUrl} onSheetUrlChange={v=>{setSheetUrl(v);LS.set("sheetUrl",v);}}
+              externalSheetName={sheetName} onSheetNameChange={v=>{setSheetName(v);LS.set("sheetName",v);}}
+            />
           </div>
         )}
       </div>
