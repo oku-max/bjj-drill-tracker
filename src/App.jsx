@@ -26,6 +26,12 @@ const daysSince = (d) => !d ? 999 : Math.floor((new Date(today) - new Date(d)) /
 const fmtTime = (s) => `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
 const uid = () => `${Date.now()}_${Math.random().toString(36).slice(2)}`;
 const CATEGORIES = ["すべて","トップ","ボトム","スタンディング","ハーフ","バック","ドリル"];
+const PROFICIENCY_LEVELS = [
+  "0.知らない・忘れた",
+  "1.やり方はわかるけどうまく使えない",
+  "2.スパーで再現できる・挑戦中",
+  "3.得意技",
+];
 const WEEK_DAYS = ["日","月","火","水","木","金","土"];
 
 const ACTIONS = ["すべて","エスケープ・ディフェンス","パスガード","アタック","スイープ","リテンション","コントロール","テイクダウン","崩し"];
@@ -540,9 +546,11 @@ function DrillCard({ drill, mode, done, elapsed, selected, onToggle, onTimer, on
               {onProficiencyChange&&(
                 <div style={{marginBottom:10}}>
                   <div style={{fontSize:11,color:"var(--muted)",marginBottom:4,fontWeight:500}}>📈 習熟度</div>
-                  <input className="fi" style={{fontSize:12}} value={drill.proficiency||""}
-                    onChange={e=>onProficiencyChange(drill.id, e.target.value)}
-                    placeholder="例: 初級・中級・上級など"/>
+                  <select className="fi fs" style={{fontSize:12}} value={drill.proficiency||""}
+                    onChange={e=>onProficiencyChange(drill.id, e.target.value)}>
+                    <option value="">-- 選択 --</option>
+                    {PROFICIENCY_LEVELS.map(l=><option key={l} value={l}>{l}</option>)}
+                  </select>
                 </div>
               )}
 
@@ -585,7 +593,7 @@ function DrillCard({ drill, mode, done, elapsed, selected, onToggle, onTimer, on
 }
 
 // ─── Sheets Panel ─────────────────────────────────────────────────────────────
-function SheetsPanel({ drills, onSync }) {
+function SheetsPanel({ drills, onSync, quickAction, onActionDone }) {
   const [token, setToken] = useState(null);
   const [sheetUrl, setSheetUrl] = useState(LS.get("sheetUrl",""));
   const [sheetName, setSheetName] = useState(LS.get("sheetName","柔術基本技"));
@@ -606,12 +614,19 @@ function SheetsPanel({ drills, onSync }) {
     if (saved && Date.now() < exp) {
       setToken(saved); setStatus("connected"); setMsg("✅ 自動ログイン済み");
     } else if (saved) {
-      // トークン期限切れ → クリア
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(TOKEN_EXP_KEY);
       setStatus("disconnected"); setMsg("⚠️ ログインの有効期限が切れました。再ログインしてください。");
     }
   }, []);
+
+  // ヘッダーボタンからのクイックアクション
+  useEffect(() => {
+    if (!quickAction || !token) return;
+    if (quickAction === "read") fetchSheet();
+    if (quickAction === "write") writeBack();
+    onActionDone && onActionDone();
+  }, [quickAction]);
 
   const login = () => {
     if (!window.google) { setMsg("Google APIが読み込まれていません。"); setStatus("error"); return; }
@@ -1257,6 +1272,7 @@ export default function App() {
   const [timerDrill, setTimerDrill] = useState(null);
   const [activeRoutine, setActiveRoutine] = useState(null);
   const [routineMenuAnchor, setRoutineMenuAnchor] = useState(null);
+  const [quickAction, setQuickAction] = useState(null); // "read" | "write" | null
 
   // ── Firebase リアルタイム同期 ────────────────────────────────────────────────
   const [syncStatus, setSyncStatus] = useState("connecting"); // connecting | synced | error
@@ -1484,6 +1500,12 @@ export default function App() {
               {syncStatus==="synced"&&<span style={{color:"var(--accent-m)"}}>☁️ 同期済み</span>}
               {syncStatus==="error"&&<span style={{color:"var(--danger)"}}>⚠️ オフライン</span>}
               <span>{drills.length}件</span>
+              <button className="btn btn-o btn-xs" title="シートから読み込む"
+                onClick={()=>{ setTab("sync"); setQuickAction("read"); }}
+                style={{padding:"3px 8px",fontSize:11}}>↓ 読込</button>
+              <button className="btn btn-o btn-xs" title="シートに書き戻す"
+                onClick={()=>{ setTab("sync"); setQuickAction("write"); }}
+                style={{padding:"3px 8px",fontSize:11}}>↑ 書込</button>
             </div>
           </div>
         </div>
@@ -1634,7 +1656,8 @@ export default function App() {
         {tab==="sync"&&(
           <div className="content fa">
             <div className="sh"><div><div className="st">シート連携</div></div></div>
-            <SheetsPanel drills={drills} onSync={syncDrills}/>
+            <SheetsPanel drills={drills} onSync={syncDrills}
+              quickAction={quickAction} onActionDone={()=>setQuickAction(null)}/>
           </div>
         )}
       </div>
