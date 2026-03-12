@@ -18,7 +18,7 @@ const dbRef = () => doc(db, "users", USER_ID);
 
 // ─── Google OAuth Config ───────────────────────────────────────────────────────
 const GOOGLE_CLIENT_ID = "761507724767-f0rmd48c8k5js8bnv8ufb0hrmdkl4hna.apps.googleusercontent.com";
-const SCOPES = "https://www.googleapis.com/auth/spreadsheets";
+const SCOPES = "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.readonly";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const today = new Date().toISOString().split("T")[0];
@@ -583,7 +583,7 @@ function DrillCard({ drill, mode, done, elapsed, selected, onToggle, onTimer, on
             {!drill.fixed&&!(drill.fixedBySheet)&&mode==="manage"&&(
               <button className="bti" onClick={onUnfix}>{Ic.pin} 固定にする</button>
             )}
-            {!drill.fromSheet&&mode==="manage"&&<button className="bti" onClick={onEdit}>{Ic.edit} 編集</button>}
+            {(mode==="manage"||mode==="select")&&<button className="bti" onClick={onEdit}>{Ic.edit} 編集</button>}
             {mode==="manage"&&<button className="bti d" onClick={()=>{if(window.confirm("削除しますか？"))onDelete();}}>{Ic.trash} 削除</button>}
           </div>
         </div>
@@ -1006,6 +1006,101 @@ function SuggestTab({ drills, onAddToToday }) {
   );
 }
 
+
+// ─── Drive File Picker ────────────────────────────────────────────────────────
+function DrivePicker({ token, onSelect, onClose }) {
+  const [q, setQ] = useState("");
+  const [files, setFiles] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [searched, setSearched] = useState(false);
+
+  const search = async (query) => {
+    if (!token) return;
+    setLoading(true);
+    try {
+      // 動画ファイルを検索（mp4, mov, avi等）
+      const qStr = query
+        ? `name contains '${query}' and mimeType contains 'video/'`
+        : `mimeType contains 'video/'`;
+      const params = new URLSearchParams({
+        q: qStr,
+        fields: "files(id,name,mimeType,modifiedTime,size)",
+        orderBy: "modifiedTime desc",
+        pageSize: "50",
+      });
+      const res = await fetch(
+        `https://www.googleapis.com/drive/v3/files?${params}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!res.ok) throw new Error("取得失敗");
+      const data = await res.json();
+      setFiles(data.files || []);
+      setSearched(true);
+    } catch(e) {
+      setFiles([]);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => { search(""); }, []);
+
+  const toEmbedUrl = (fileId) => `https://drive.google.com/file/d/${fileId}/preview`;
+  const fmtSize = (bytes) => {
+    if (!bytes) return "";
+    const mb = bytes / 1024 / 1024;
+    return mb > 1 ? `${mb.toFixed(1)}MB` : `${(bytes/1024).toFixed(0)}KB`;
+  };
+  const fmtDate = (s) => s ? s.slice(0,10) : "";
+
+  return (
+    <div className="ov" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{maxWidth:480,maxHeight:"85vh",display:"flex",flexDirection:"column"}}>
+        <div className="mh">
+          <div className="mt">📁 Googleドライブから動画を選択</div>
+          <button className="btn btn-g btn-sm" style={{padding:"3px"}} onClick={onClose}>{Ic.close}</button>
+        </div>
+        <div style={{padding:"12px 18px 8px",borderBottom:"1px solid var(--border)"}}>
+          <div style={{display:"flex",gap:8}}>
+            <input className="fi" style={{flex:1}} value={q}
+              onChange={e=>setQ(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&search(q)}
+              placeholder="ファイル名で検索..."/>
+            <button className="btn btn-p btn-sm" onClick={()=>search(q)}>
+              {Ic.search} 検索
+            </button>
+          </div>
+        </div>
+        <div style={{flex:1,overflowY:"auto",padding:"8px 0"}}>
+          {loading&&<div style={{padding:"20px",textAlign:"center",color:"var(--muted)"}}>⏳ 読み込み中...</div>}
+          {!loading&&searched&&files.length===0&&(
+            <div className="empty"><div className="empty-i">🎬</div>動画ファイルが見つかりません</div>
+          )}
+          {!loading&&files.map(f=>(
+            <div key={f.id}
+              style={{padding:"10px 18px",borderBottom:"1px solid var(--border)",cursor:"pointer",
+                display:"flex",alignItems:"center",gap:10,transition:"background .1s"}}
+              onMouseEnter={e=>e.currentTarget.style.background="var(--accent-l)"}
+              onMouseLeave={e=>e.currentTarget.style.background=""}
+              onClick={()=>onSelect(toEmbedUrl(f.id), f.name)}>
+              <span style={{fontSize:20,flexShrink:0}}>🎬</span>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.name}</div>
+                <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>
+                  {fmtDate(f.modifiedTime)}{f.size&&` · ${fmtSize(Number(f.size))}`}
+                </div>
+              </div>
+              <span style={{fontSize:11,color:"var(--accent)",fontWeight:500,flexShrink:0}}>選択</span>
+            </div>
+          ))}
+        </div>
+        <div style={{padding:"10px 18px",borderTop:"1px solid var(--border)",fontSize:11,color:"var(--muted)"}}>
+          ※「リンクを知っている全員が閲覧可能」に設定されたファイルのみ再生できます
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Filter Row (共通) ────────────────────────────────────────────────────────
 // multi=true のとき current は配列、onChange(v) でトグル
 function FilterRow({label, values, current, onChange, multi=false}) {
@@ -1029,7 +1124,7 @@ function FilterRow({label, values, current, onChange, multi=false}) {
 }
 
 // ─── Search Tab ───────────────────────────────────────────────────────────────
-function SearchTab({ drills, routines, onAddToToday, onDeleteDrills, onCreateRoutine, onAddToRoutine, onShowRoutineMenu, onMemoChange, onStarChange, onDrillToggle, onFavoriteChange, onProficiencyChange }) {
+function SearchTab({ drills, routines, onAddToToday, onDeleteDrills, onCreateRoutine, onAddToRoutine, onShowRoutineMenu, onMemoChange, onStarChange, onDrillToggle, onFavoriteChange, onProficiencyChange, onEditDrill }) {
   const [q, setQ] = useState("");
   const [cats, setCats] = useState([]);
   const [actions, setActions] = useState([]);
@@ -1143,7 +1238,7 @@ function SearchTab({ drills, routines, onAddToToday, onDeleteDrills, onCreateRou
             <DrillCard key={d.id} drill={d} mode="select"
               selected={selectedIds.includes(String(d.id))}
               onToggle={()=>toggleSelect(d.id)}
-              onTimer={()=>{}} onUnfix={()=>{}} onDelete={()=>{}} onEdit={()=>{}}
+              onTimer={()=>{}} onUnfix={()=>{}} onDelete={()=>{}} onEdit={()=>onEditDrill&&onEditDrill(d)}
               onMemoChange={onMemoChange} onStarChange={onStarChange}
               onDrillToggle={onDrillToggle}
               onFavoriteChange={onFavoriteChange} onProficiencyChange={onProficiencyChange}/>
@@ -1212,13 +1307,20 @@ function RoutineForm({ routine, drills, onSave, onCancel }) {
 }
 
 // ─── Drill Form ───────────────────────────────────────────────────────────────
-function DrillForm({ drill, onSave, onCancel }) {
-  const [f, setF] = useState(drill||{name:"",category:"ボトム",tags:[],sheetMemo:"",youtubeUrl:"",imageUrl:"",fixed:false,targetSeconds:60,history:[]});
+function DrillForm({ drill, onSave, onCancel, sheetToken }) {
+  const [f, setF] = useState(drill||{name:"",category:"ボトム",tags:[],sheetMemo:"",youtubeUrl:"",youtubeUrl2:"",youtubeUrl3:"",imageUrl:"",fixed:false,targetSeconds:60,history:[]});
   const [ti, setTi] = useState("");
+  const [drivePickerTarget, setDrivePickerTarget] = useState(null); // "youtubeUrl"|"youtubeUrl2"|"youtubeUrl3"
   const set = (k,v) => setF(p=>({...p,[k]:v}));
   const TARGETS = [[30,"30秒"],[60,"1分"],[90,"1分30秒"],[120,"2分"],[180,"3分"],[300,"5分"]];
+  // DrillFormはsheetTokenが必要 → propsで受け取る
+  const token = sheetToken || null;
   return (
     <div className="app">
+      {drivePickerTarget&&<DrivePicker token={token}
+        onClose={()=>setDrivePickerTarget(null)}
+        onSelect={(url)=>{ set(drivePickerTarget, url); setDrivePickerTarget(null); }}
+      />}
       <div className="hd"><div className="hd-in">
         <button className="btn btn-g" onClick={onCancel}>{Ic.back}</button>
         <div className="logo" style={{fontSize:15}}>{drill?"ドリル編集":"新規ドリル"}</div>
@@ -1238,7 +1340,23 @@ function DrillForm({ drill, onSave, onCancel }) {
             </select>
           </div>
           <div className="fg"><label className="fl">メモ</label><textarea className="fi mi" style={{minHeight:70}} value={f.sheetMemo} onChange={e=>set("sheetMemo",e.target.value)}/></div>
-          <div className="fg"><label className="fl">YouTube URL</label><input className="fi" value={f.youtubeUrl} onChange={e=>set("youtubeUrl",e.target.value)} placeholder="https://www.youtube.com/..."/></div>
+          {[["youtubeUrl","動画1 URL"],["youtubeUrl2","動画2 URL"],["youtubeUrl3","動画3 URL"]].map(([key,label])=>(
+            <div className="fg" key={key}>
+              <label className="fl">{label}</label>
+              <div style={{display:"flex",gap:6}}>
+                <input className="fi" style={{flex:1}} value={f[key]||""} onChange={e=>set(key,e.target.value)}
+                  placeholder="YouTube / Drive URL"/>
+                {token&&<button type="button" className="btn btn-o btn-sm" style={{flexShrink:0}}
+                  onClick={()=>setDrivePickerTarget(key)} title="Driveから選択">
+                  📁
+                </button>}
+                {f[key]&&<button type="button" className="btn btn-g btn-sm" style={{flexShrink:0}}
+                  onClick={()=>set(key,"")}>
+                  {Ic.close}
+                </button>}
+              </div>
+            </div>
+          ))}
           <div className="fg"><label className="fl">タグ</label>
             <div style={{display:"flex",gap:6,marginBottom:6}}>
               <input className="fi" style={{flex:1}} value={ti} onChange={e=>setTi(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&ti.trim()){set("tags",[...f.tags,ti.trim()]);setTi("");}}} placeholder="Enterで追加"/>
@@ -1529,7 +1647,7 @@ export default function App() {
     setDrills(nd); saveAll(nd,null,null,undefined);
   };
 
-  if (editDrill!==null) return <><style>{CSS}</style><DrillForm drill={editDrill==="new"?null:editDrill} onSave={saveDrill} onCancel={()=>setEditDrill(null)}/></>;
+  if (editDrill!==null) return <><style>{CSS}</style><DrillForm drill={editDrill==="new"?null:editDrill} onSave={saveDrill} onCancel={()=>setEditDrill(null)} sheetToken={sheetToken}/></>;
   if (editRoutine!==null) return <><style>{CSS}</style><RoutineForm routine={editRoutine==="new"?null:editRoutine} drills={drills} onSave={saveRoutine} onCancel={()=>setEditRoutine(null)}/></>;
 
   const TABS = [
@@ -1729,6 +1847,7 @@ export default function App() {
               onDrillToggle={handleDrillToggle}
               onFavoriteChange={handleFavoriteChange}
               onProficiencyChange={handleProficiencyChange}
+              onEditDrill={setEditDrill}
             />
           </div>
         )}
